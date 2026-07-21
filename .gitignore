@@ -1,0 +1,32 @@
+# Downloaded datasets and model weights (never commit signal data or checkpoints)
+model_weights/
+model_repos/
+data/
+*.dat
+*.hea
+*.npz
+
+# Feature and result caches
+features_cache/
+degraded_cache/
+results/
+manifest_extract.txt
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# Logs
+logs/
+*.out
+*.err
+
+# Secrets
+.env
+
+# OS
+.DS_Store
