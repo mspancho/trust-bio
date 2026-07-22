@@ -221,5 +221,6 @@ def build_pulsedb_label_table(
         return pd.DataFrame(
             columns=["hr_regression", "sbp_regression", "dbp_regression"],
             index=pd.Index([], name="visit_id"),
+            dtype="float64",
         )
     return pd.DataFrame(rows).set_index("visit_id")
