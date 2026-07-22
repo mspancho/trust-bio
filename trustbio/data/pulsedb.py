@@ -51,6 +51,10 @@ from .cohort import Cohort, assert_no_subject_leakage, chronological_or_random_s
 PULSEDB_FS = 125
 PULSEDB_SEGMENT_SEC = 10
 
+# Matches the lab's shared dataset convention (see the on-disk locations table
+# in the implementation plan) and Task 7's real fetch script default.
+DEFAULT_ROOT = Path("/n/data1/hms/dbmi/rajpurkar/lab/datasets/pulsedb")
+
 
 @dataclass
 class PulseDBPaths:
@@ -213,4 +217,9 @@ def build_pulsedb_label_table(
             "sbp_regression": windows["sbp"][win_idx],
             "dbp_regression": windows["dbp"][win_idx],
         })
+    if not rows:
+        return pd.DataFrame(
+            columns=["hr_regression", "sbp_regression", "dbp_regression"],
+            index=pd.Index([], name="visit_id"),
+        )
     return pd.DataFrame(rows).set_index("visit_id")
