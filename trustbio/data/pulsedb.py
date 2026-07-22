@@ -58,11 +58,11 @@ class PulseDBPaths:
 
     @property
     def mimic_dir(self) -> Path:
-        return self.root / "PulseDB_MIMIC"
+        return self.root / "Segment_Files" / "PulseDB_MIMIC"
 
     @property
     def vital_dir(self) -> Path:
-        return self.root / "PulseDB_Vital"
+        return self.root / "Segment_Files" / "PulseDB_Vital"
 
     def source_dir(self, source: str) -> Path:
         return self.mimic_dir if source == "mimic" else self.vital_dir

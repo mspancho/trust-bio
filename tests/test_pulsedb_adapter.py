@@ -64,7 +64,7 @@ def fake_pulsedb_root(tmp_path):
     fixture."""
     root = tmp_path / "pulsedb"
     for source, subdir in [("mimic", "PulseDB_MIMIC"), ("vital", "PulseDB_Vital")]:
-        d = root / subdir
+        d = root / "Segment_Files" / subdir
         d.mkdir(parents=True)
         rng = np.random.default_rng(0 if source == "mimic" else 1)
         # subject 0: 5 windows, all included
@@ -89,7 +89,7 @@ def distinct_window_root(tmp_path):
     different ECG content, to confirm the signal loader indexes the correct
     window rather than always returning window 0."""
     root = tmp_path / "pulsedb"
-    d = root / "PulseDB_MIMIC"
+    d = root / "Segment_Files" / "PulseDB_MIMIC"
     d.mkdir(parents=True)
     n_samples = PULSEDB_SEGMENT_SEC * PULSEDB_FS
     ecg = np.zeros((2, 1, n_samples), dtype=np.float32)
@@ -176,5 +176,5 @@ def test_pulsedb_label_table_hr_derived_from_ecg(fake_pulsedb_root):
 
 def test_pulsedb_paths_properties(tmp_path):
     paths = PulseDBPaths(tmp_path)
-    assert paths.mimic_dir == tmp_path / "PulseDB_MIMIC"
-    assert paths.vital_dir == tmp_path / "PulseDB_Vital"
+    assert paths.mimic_dir == tmp_path / "Segment_Files" / "PulseDB_MIMIC"
+    assert paths.vital_dir == tmp_path / "Segment_Files" / "PulseDB_Vital"
