@@ -81,7 +81,6 @@ def run_cross_institution_eval(
         "regression", X_src_train, y_src_train[HP_SELECTION_REG_TASK].to_numpy(float),
         X_src_val, y_src_val[HP_SELECTION_REG_TASK].to_numpy(float), rng,
     )
-    dataset_scope = {t.dataset for t in tasks_for_dataset("pulsedb")}
     has_cls_task = HP_SELECTION_CLS_TASK in y_src_train.columns
     c_value = (
         _select_hp_on_source_val(

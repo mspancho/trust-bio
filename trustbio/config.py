@@ -90,7 +90,17 @@ assert len(ALL_TASKS) == 4, "TRUST-BIO defines exactly 4 tasks"
 
 
 def tasks_for_dataset(dataset: str) -> list[Task]:
-    """Tasks scoped to `dataset` (its own tasks plus any "all"-scoped tasks)."""
+    """Tasks scoped to `dataset` (its own tasks plus any "all"-scoped tasks).
+
+    NOTE: `dataset` here means a Task.dataset value ("pulsedb", "mimic_ext_ppg",
+    "but_ppg", or "all") -- NOT one of scripts/_dataset_builders.py's
+    DATASET_CHOICES ("pulsedb_mimic"/"pulsedb_vital" both collapse to
+    "pulsedb" here, since PulseDB's task scoping doesn't distinguish its two
+    source institutions). Passing "pulsedb_mimic"/"pulsedb_vital" directly
+    would silently return only the "all"-scoped tasks (hr_regression),
+    dropping sbp/dbp_regression -- always pass "pulsedb", not a DATASET_CHOICES
+    value, when calling this function for PulseDB.
+    """
     return [t for t in ALL_TASKS if t.dataset in ("all", dataset)]
 
 

@@ -55,8 +55,11 @@ def main():
         sub = meta[meta["folder_path"].str.startswith(patient_dir)]
         for _, row in sub.iterrows():
             for ext in (".hea", ".dat"):
-                url = BASE_URL + row["folder_path"] + ext
-                dest = args.root / row["folder_path"] + ext
+                # folder_path already ends in "/" (see trustbio/data/mimic_ext_ppg.py);
+                # the actual file is signal_file_name + ext under that folder.
+                rel = row["folder_path"] + row["signal_file_name"] + ext
+                url = BASE_URL + rel
+                dest = args.root / rel
                 if not dest.exists():
                     _wget(url, dest, user, password)
     print("[fetch_mimic_ext_ppg] done")

@@ -146,20 +146,33 @@ def evaluate_model(
             train_idx = _resample_indices(n_train, frac, rng)
 
             # Per task-type regularisation, selected on the representative task.
-            alpha = select_hyperparameter(
-                "regression",
-                X_train, y_train[HP_SELECTION_REG_TASK].to_numpy(float),
-                feats.X_val, feats.y_val[HP_SELECTION_REG_TASK].to_numpy(float),
-                rng, train_idx,
+            # Not every dataset's label table has every task's column (e.g.
+            # but_ppg has only hr_regression, mimic_ext_ppg lacks sbp/dbp) --
+            # only select a hyperparameter for a task type that's actually
+            # present, mirroring eval/transport.py's same guard.
+            has_reg_task = HP_SELECTION_REG_TASK in y_train.columns
+            has_cls_task = HP_SELECTION_CLS_TASK in y_train.columns
+
+            alpha = (
+                select_hyperparameter(
+                    "regression",
+                    X_train, y_train[HP_SELECTION_REG_TASK].to_numpy(float),
+                    feats.X_val, feats.y_val[HP_SELECTION_REG_TASK].to_numpy(float),
+                    rng, train_idx,
+                ) if has_reg_task else None
             )
-            c_value = select_hyperparameter(
-                "classification",
-                X_train, y_train[HP_SELECTION_CLS_TASK].to_numpy(float),
-                feats.X_val, feats.y_val[HP_SELECTION_CLS_TASK].to_numpy(float),
-                rng, train_idx,
+            c_value = (
+                select_hyperparameter(
+                    "classification",
+                    X_train, y_train[HP_SELECTION_CLS_TASK].to_numpy(float),
+                    feats.X_val, feats.y_val[HP_SELECTION_CLS_TASK].to_numpy(float),
+                    rng, train_idx,
+                ) if has_cls_task else None
             )
 
             for task_name, task in TASKS_BY_NAME.items():
+                if task_name not in y_train.columns:
+                    continue
                 reg_value = alpha if task.kind == "regression" else c_value
                 score = fit_predict_task(
                     task_name,

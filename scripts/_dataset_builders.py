@@ -26,11 +26,11 @@ DATASET_CHOICES = ["pulsedb_mimic", "pulsedb_vital", "mimic_ext_ppg", "but_ppg"]
 def add_dataset_root_args(ap):
     """Shared --pulsedb-root/--mimic-ext-ppg-root/--but-ppg-root arguments."""
     from pathlib import Path
+    from trustbio.data.pulsedb import DEFAULT_ROOT as PULSEDB_ROOT
     from trustbio.data.mimic_ext_ppg import DEFAULT_ROOT as MIMIC_EXT_PPG_ROOT
     from trustbio.data.but_ppg import DEFAULT_ROOT as BUT_PPG_ROOT
 
-    ap.add_argument("--pulsedb-root", type=Path,
-                     default=Path("/n/data1/hms/dbmi/rajpurkar/lab/datasets/pulsedb"))
+    ap.add_argument("--pulsedb-root", type=Path, default=PULSEDB_ROOT)
     ap.add_argument("--mimic-ext-ppg-root", type=Path, default=MIMIC_EXT_PPG_ROOT)
     ap.add_argument("--but-ppg-root", type=Path, default=BUT_PPG_ROOT)
     return ap
