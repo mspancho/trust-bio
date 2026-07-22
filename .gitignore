@@ -1,7 +1,7 @@
 # Downloaded datasets and model weights (never commit signal data or checkpoints)
 model_weights/
 model_repos/
-data/
+/data/
 *.dat
 *.hea
 *.npz
