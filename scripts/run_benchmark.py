@@ -16,7 +16,10 @@ from trustbio.eval.report import build_main_table, rank_models
 from trustbio.pipeline import run_evaluation
 from trustbio.store import FeatureStore
 
-from _dataset_builders import DATASET_CHOICES, add_dataset_root_args, build_dataset_handle
+if __package__:
+    from ._dataset_builders import DATASET_CHOICES, add_dataset_root_args, build_dataset_handle
+else:
+    from _dataset_builders import DATASET_CHOICES, add_dataset_root_args, build_dataset_handle
 
 
 def main():

@@ -9,7 +9,10 @@ from trustbio.config import is_model_available
 from trustbio.pipeline import extract_features_for_model
 from trustbio.store import FeatureStore
 
-from _dataset_builders import DATASET_CHOICES, add_dataset_root_args, build_dataset_handle
+if __package__:
+    from ._dataset_builders import DATASET_CHOICES, add_dataset_root_args, build_dataset_handle
+else:
+    from _dataset_builders import DATASET_CHOICES, add_dataset_root_args, build_dataset_handle
 
 
 def main():
