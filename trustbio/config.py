@@ -206,6 +206,15 @@ def _has_huggingface_access() -> bool:
     importable."""
     if _os.environ.get("HF_TOKEN") or _os.environ.get("HUGGING_FACE_HUB_TOKEN"):
         return True
+    # Cached-token fallback (i.e. `huggingface-cli login` with no env var set).
+    # `get_token()` is the current API; `HfFolder.get_token()` is the legacy one
+    # and is GONE in recent huggingface_hub (>=1.0), so try the modern name
+    # first -- relying on HfFolder alone silently disabled this whole fallback.
+    try:
+        from huggingface_hub import get_token
+        return get_token() is not None
+    except ImportError:
+        pass
     try:
         from huggingface_hub import HfFolder
         return HfFolder.get_token() is not None

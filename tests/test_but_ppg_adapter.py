@@ -12,22 +12,30 @@ from trustbio.data.but_ppg import (
 
 @pytest.fixture
 def fake_but_ppg_root(tmp_path):
+    """Mirrors PhysioNet's REAL BUT PPG layout: each six-digit recording lives
+    in its own subdirectory (`<root>/100001/100001_PPG.{dat,hea}`), with only
+    the annotation CSVs at the root. An earlier version of this fixture wrote
+    every record flat at the root, which matched what the adapter used to
+    assume but NOT the real dataset -- so it hid a real path bug until BUT PPG
+    was actually fetched. Keep this nested."""
     root = tmp_path / "but-ppg"
     root.mkdir()
     rows = []
     for i, rec_id in enumerate(["100001", "100002", "112001"]):  # last has ACC
         rng = np.random.default_rng(i)
+        rec_dir = root / rec_id
+        rec_dir.mkdir()
         ppg = rng.standard_normal(30 * 10).astype(np.float32)
         ecg = rng.standard_normal(1000 * 10).astype(np.float32)
         wfdb.wrsamp(f"{rec_id}_PPG", fs=30, units=["NU"], sig_name=["PPG"],
-                    p_signal=ppg[:, None], write_dir=str(root), fmt=["16"])
+                    p_signal=ppg[:, None], write_dir=str(rec_dir), fmt=["16"])
         wfdb.wrsamp(f"{rec_id}_ECG", fs=1000, units=["mV"], sig_name=["ECG"],
-                    p_signal=ecg[:, None], write_dir=str(root), fmt=["16"])
+                    p_signal=ecg[:, None], write_dir=str(rec_dir), fmt=["16"])
         if rec_id == "112001":
             acc = rng.standard_normal((100 * 10, 3)).astype(np.float32)
             wfdb.wrsamp(f"{rec_id}_ACC", fs=100, units=["g", "g", "g"],
                         sig_name=["ACC_X", "ACC_Y", "ACC_Z"],
-                        p_signal=acc, write_dir=str(root), fmt=["16", "16", "16"])
+                        p_signal=acc, write_dir=str(rec_dir), fmt=["16", "16", "16"])
         rows.append({"signal_id": rec_id, "quality": 1 if i != 1 else 0, "hr": 70.0 + i})
     quality_hr = pd.DataFrame(rows)
     quality_hr.to_csv(root / "quality-hr-ann.csv", index=False)

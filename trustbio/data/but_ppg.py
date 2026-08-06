@@ -58,14 +58,26 @@ def build_but_ppg_cohort(
     return Cohort(visits=df.reset_index(drop=True))
 
 
+def _record_path(root: Path, visit_id: str, suffix: str) -> Path:
+    """Path to one WFDB record, WITHOUT its extension.
+
+    BUT PPG stores each recording in its own six-digit subdirectory (confirmed
+    against the live PhysioNet page): `<root>/100001/100001_PPG.{dat,hea}`,
+    NOT a flat `<root>/100001_PPG.{dat,hea}`. Only the two annotation CSVs
+    (quality-hr-ann.csv, subject-info.csv) live at the root itself.
+    """
+    return root / visit_id / f"{visit_id}_{suffix}"
+
+
 def make_but_ppg_signal_loader(root: str | Path = DEFAULT_ROOT):
     """SignalLoader closure: (visit_id, modality) -> (raw_signal, fs). Reads
-    `{visit_id}_PPG` (30 Hz) or `{visit_id}_ECG` (1000 Hz) WFDB records."""
+    `{visit_id}/{visit_id}_PPG` (30 Hz) or `{visit_id}/{visit_id}_ECG`
+    (1000 Hz) WFDB records."""
     root = Path(root)
 
     def load(visit_id: str, modality: str):
         suffix = {"ppg": "PPG", "ecg": "ECG"}[modality]
-        rec = wfdb.rdrecord(str(root / f"{visit_id}_{suffix}"))
+        rec = wfdb.rdrecord(str(_record_path(root, visit_id, suffix)))
         sig = np.asarray(rec.p_signal)[:, 0].astype(np.float32)
         return sig, rec.fs
 
@@ -80,7 +92,7 @@ def load_but_ppg_accelerometer(
     if int(visit_id) < ACC_MIN_RECORD_ID:
         return None
     root = Path(root)
-    rec = wfdb.rdrecord(str(root / f"{visit_id}_ACC"))
+    rec = wfdb.rdrecord(str(_record_path(root, visit_id, "ACC")))
     return np.asarray(rec.p_signal).astype(np.float32), rec.fs
 
 

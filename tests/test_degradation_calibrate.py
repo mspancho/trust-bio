@@ -33,11 +33,17 @@ def fake_but_ppg_with_accel(tmp_path):
         w_hf = accel_scale / (accel_scale + 1.0)
         ppg = ((1 - w_hf) * smooth + w_hf * hf_noise).astype(np.float32)
         acc = (accel_scale * rng.standard_normal((100 * 10, 3))).astype(np.float32)
+        # Nested per-record subdirectory, matching PhysioNet's REAL BUT PPG
+        # layout (<root>/112001/112001_PPG.*) -- see the note in
+        # tests/test_but_ppg_adapter.py. Writing these flat at <root> matched
+        # the adapter's old (wrong) assumption and hid a real path bug.
+        rec_dir = root / rec_id
+        rec_dir.mkdir()
         wfdb.wrsamp(f"{rec_id}_PPG", fs=30, units=["NU"], sig_name=["PPG"],
-                    p_signal=ppg[:, None], write_dir=str(root), fmt=["16"])
+                    p_signal=ppg[:, None], write_dir=str(rec_dir), fmt=["16"])
         wfdb.wrsamp(f"{rec_id}_ACC", fs=100, units=["g", "g", "g"],
                     sig_name=["ACC_X", "ACC_Y", "ACC_Z"], p_signal=acc,
-                    write_dir=str(root), fmt=["16", "16", "16"])
+                    write_dir=str(rec_dir), fmt=["16", "16", "16"])
         rows.append({"signal_id": rec_id, "quality": quality, "hr": 70.0})
     pd.DataFrame(rows).to_csv(root / "quality-hr-ann.csv", index=False)
     return root
