@@ -10,6 +10,7 @@ within that subject (e.g. "100001" = subject 100, measurement 1).
 """
 from __future__ import annotations
 
+import re as _re
 from pathlib import Path
 
 import numpy as np
@@ -59,48 +60,152 @@ def _subject_id_from_record(record_id: str) -> str:
     return record_id[:3]
 
 
-def _has_usable_header(root: Path, visit_id: str) -> bool:
-    """False for records whose WFDB header is malformed upstream.
+# One "<file> 16 <gain>(<baseline>)/<units>" signal-spec line of a WFDB header.
+_SPEC_RE = _re.compile(r"\s16\s+(-?[\d.]+)\((-?\d+)\)/(\S+)")
 
-    48 of BUT PPG v2.0.0's 3,888 records (all IDs < 112001, i.e. the
-    pre-accelerometer era) ship a header with `nsig` and `nsamp` TRANSPOSED --
-    e.g. `100001_PPG 300 30 1` declares 300 signals of 1 sample each, when the
-    600-byte .dat provably holds 300 int16 samples of one signal. wfdb does not
-    error on these; it faithfully returns a single-sample array, so the bad
-    records would silently poison downstream features. Detect and drop them.
 
-    Tracked follow-up: check PhysioNet errata / upstream authors so the paper's
-    Methods can cite the real cause rather than just reporting an exclusion.
-    """
-    hea = _record_path(root, visit_id, "PPG").with_suffix(".hea")
+def _read_header_specs(hea: Path) -> tuple[list[str], list[float], list[int]]:
+    """Return (first_line_fields, gains, baselines) from a WFDB .hea."""
     try:
-        fields = hea.read_text(errors="replace").splitlines()[0].split()
-    except (OSError, IndexError):
-        return False
+        lines = hea.read_text(errors="replace").splitlines()
+    except OSError:
+        return [], [], []
+    if not lines:
+        return [], [], []
+    gains, baselines = [], []
+    for line in lines[1:]:
+        m = _SPEC_RE.search(line)
+        if m:
+            gains.append(float(m.group(1)))
+            baselines.append(int(m.group(2)))
+    return lines[0].split(), gains, baselines
+
+
+def is_release1_record(root: Path, visit_id: str, suffix: str = "PPG") -> bool:
+    """True if this record uses BUT PPG release 1's broken header encoding.
+
+    Per PhysioNet's Release Notes, release 1 covered IDs 100001-111004 and
+    release 2 added 112001 onwards. All 48 release-1 records ship a header whose
+    first line reads e.g. `100001_PPG 300 30 1` -- i.e. "300 signals, 30 Hz,
+    1 sample". That is NOT a transposed channel count: release 1 wrote one
+    signal-spec line PER SAMPLE, and the sample values themselves live in those
+    lines' gain/baseline fields, while the .dat payload is all zeros.
+    Release-2 headers are correct (`112001_PPG 3 30 300`).
+
+    Detected by the signature `nsamp == 1 and nsig > 1`, which no well-formed
+    single-channel record produces. PhysioNet publishes no errata for this
+    (checked 2026-08-06).
+    """
+    fields, _gains, _baselines = _read_header_specs(
+        _record_path(root, visit_id, suffix).with_suffix(".hea")
+    )
     if len(fields) < 4:
         return False
     try:
-        nsig, _fs, nsamp = int(fields[1]), int(fields[2]), int(fields[3])
+        nsig, nsamp = int(fields[1]), int(fields[3])
     except ValueError:
         return False
-    return not (nsamp == 1 and nsig > 1)
+    return nsamp == 1 and nsig > 1
+
+
+def _read_release1_signal(root: Path, visit_id: str, suffix: str) -> tuple[np.ndarray, int]:
+    """Reconstruct a release-1 record's waveform from its header gain fields.
+
+    The .dat is (usually) all zeros; the waveform is carried by the per-sample
+    gain/baseline pairs, so the standard WFDB conversion
+    `physical = (raw - baseline) / gain` applied element-wise recovers it. This
+    was validated against an independent label: record 100001's recovered PPG
+    yields 81.8 bpm vs. the 83 bpm reference HR in quality-hr-ann.csv (1.4%
+    error). See `reconstruction_hr_error_pct` for per-record fidelity.
+    """
+    hea = _record_path(root, visit_id, suffix).with_suffix(".hea")
+    fields, gains, baselines = _read_header_specs(hea)
+    if not gains:
+        raise ValueError(f"no parsable signal specs in {hea}")
+    fs = int(round(float(fields[2])))
+
+    dat = _record_path(root, visit_id, suffix).with_suffix(".dat")
+    raw = np.fromfile(dat, dtype="<i2").astype(np.float64)
+    n = len(gains)
+    # Release 1's .dat is normally all zeros; when it does carry samples (10 of
+    # the 48 records have a non-zero ECG .dat) use them, else treat as zeros.
+    if len(raw) == n and np.any(raw):
+        digital = raw
+    else:
+        digital = np.zeros(n, dtype=np.float64)
+
+    g = np.asarray(gains, dtype=np.float64)
+    b = np.asarray(baselines, dtype=np.float64)
+    g[g == 0] = np.nan  # never divide by a zero gain
+    sig = (digital - b) / g
+    return np.nan_to_num(sig, nan=0.0).astype(np.float32), fs
+
+
+def reconstruction_hr_error_pct(
+    root: Path, visit_id: str, reference_hr: float,
+) -> float:
+    """|recovered HR - reference HR| / reference HR * 100, or NaN if unavailable.
+
+    Fidelity check for release-1 reconstructions: estimates heart rate from the
+    recovered PPG by autocorrelation and compares it to the record's own
+    reference annotation. Across the 48 release-1 records the median error is
+    ~4%, but the distribution has a long tail (mean ~37%; ~60% within 10%), so
+    downstream consumers that need trustworthy morphology -- notably the
+    degradation calibration in `trustbio/degradation/calibrate.py` -- should
+    filter on this rather than assume every reconstruction is faithful.
+    """
+    if not reference_hr or not np.isfinite(reference_hr) or reference_hr <= 0:
+        return float("nan")
+    try:
+        sig, fs = _read_release1_signal(Path(root), visit_id, "PPG")
+    except (OSError, ValueError):
+        return float("nan")
+    sig = np.asarray(sig, dtype=np.float64)
+    if len(sig) < fs or not np.any(np.isfinite(sig)):
+        return float("nan")
+    sig = sig - sig.mean()
+    if not np.any(sig):
+        return float("nan")
+    ac = np.correlate(sig, sig, mode="full")[len(sig) - 1:]
+    if ac[0] <= 0:
+        return float("nan")
+    ac = ac / ac[0]
+    lo, hi = int(fs * 60 / 180), int(fs * 60 / 40)   # 40..180 bpm
+    hi = min(hi, len(ac))
+    if hi <= lo:
+        return float("nan")
+    period = lo + int(np.argmax(ac[lo:hi]))
+    if period <= 0:
+        return float("nan")
+    est = 60.0 * fs / period
+    return float(abs(est - reference_hr) / reference_hr * 100.0)
 
 
 def build_but_ppg_cohort(
     root: str | Path = DEFAULT_ROOT,
     quality_hr_csv: pd.DataFrame | None = None,
     seed: int = 0,
-    drop_malformed_headers: bool = True,
+    annotate_reconstruction: bool = True,
 ) -> Cohort:
     """One visit per recording (6-digit signal_id). Splits are subject-disjoint
     (first 3 digits of the ID). Passes through the native `quality` label so
     Task 13's fault taxonomy can consume it directly.
 
-    `drop_malformed_headers` (default True) excludes records whose upstream WFDB
-    header has nsig/nsamp transposed -- see `_has_usable_header`. Those records
-    load as a single garbage sample rather than raising, so keeping them would
-    silently corrupt features. The count dropped is printed so it can be
-    reported in Methods. Pass False only to reproduce the unfiltered cohort.
+    ALL 3,888 records are retained, including the 48 release-1 records whose
+    headers are malformed upstream -- their waveforms are reconstructed from the
+    header's per-sample gain fields (see `is_release1_record`), which preserves
+    the full 50-subject cohort. Excluding them would have cost 24% of subjects
+    (50 -> 38) for only 1.2% of records, since every recording of 12 release-1
+    subjects is affected.
+
+    With `annotate_reconstruction` (default True) the cohort gains two columns:
+      `reconstructed`            -- True for the 48 release-1 records
+      `reconstruction_hr_err_pct`-- |recovered HR - reference HR| / reference,
+                                    NaN for non-reconstructed records
+    Reconstruction fidelity varies (median ~4% error, but a long tail), so
+    consumers needing trustworthy morphology -- notably the degradation
+    calibration -- should filter on the error column rather than assume every
+    reconstruction is faithful. Nothing is dropped here.
     """
     root = Path(root)
     qhr = quality_hr_csv if quality_hr_csv is not None else _load_quality_hr(root)
@@ -116,16 +221,26 @@ def build_but_ppg_cohort(
     df["subject_id"] = df["visit_id"].map(_subject_id_from_record)
     df["quality"] = qhr["quality"].to_numpy()
 
-    if drop_malformed_headers:
-        n_before = len(df)
-        keep = df["visit_id"].map(lambda v: _has_usable_header(root, v))
-        df = df[keep].reset_index(drop=True)
-        n_dropped = n_before - len(df)
-        if n_dropped:
+    if annotate_reconstruction:
+        df["reconstructed"] = df["visit_id"].map(
+            lambda v: is_release1_record(root, v)
+        )
+        ref_hr = dict(zip(df["visit_id"], pd.to_numeric(qhr["hr"], errors="coerce"))) \
+            if "hr" in qhr.columns else {}
+        df["reconstruction_hr_err_pct"] = [
+            reconstruction_hr_error_pct(root, v, ref_hr.get(v, float("nan")))
+            if rec else float("nan")
+            for v, rec in zip(df["visit_id"], df["reconstructed"])
+        ]
+        n_rec = int(df["reconstructed"].sum())
+        if n_rec:
+            err = df.loc[df["reconstructed"], "reconstruction_hr_err_pct"]
+            ok = int((err < 10).sum())
             print(
-                f"[but_ppg] excluded {n_dropped}/{n_before} records with malformed "
-                "upstream WFDB headers (nsig/nsamp transposed; they load as a "
-                "single sample). Report this exclusion in Methods."
+                f"[but_ppg] reconstructed {n_rec}/{len(df)} release-1 records from "
+                f"header gain fields ({ok}/{n_rec} within 10% of reference HR; "
+                f"median err {err.median():.1f}%). All records retained; filter on "
+                "`reconstruction_hr_err_pct` where reconstruction fidelity matters."
             )
 
     df["split"] = chronological_or_random_split(
@@ -154,6 +269,11 @@ def make_but_ppg_signal_loader(root: str | Path = DEFAULT_ROOT):
 
     def load(visit_id: str, modality: str):
         suffix = {"ppg": "PPG", "ecg": "ECG"}[modality]
+        # Release-1 records can't be read by wfdb (their header declares 1
+        # sample and their .dat is zeros) -- reconstruct from the header's
+        # per-sample gain fields instead. See is_release1_record().
+        if is_release1_record(root, visit_id, suffix):
+            return _read_release1_signal(root, visit_id, suffix)
         rec = wfdb.rdrecord(str(_record_path(root, visit_id, suffix)))
         sig = np.asarray(rec.p_signal)[:, 0].astype(np.float32)
         return sig, rec.fs

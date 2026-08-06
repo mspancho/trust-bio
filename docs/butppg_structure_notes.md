@@ -63,22 +63,54 @@ this (checked 2026-08-06), so it appears to be an undocumented defect in the
 release-1 portion -- most likely different header-writing tooling between the
 two releases.
 
-## Handling: exclusion (report in Methods)
+## Handling: reconstruction (NOT exclusion)
 
-`build_but_ppg_cohort(..., drop_malformed_headers=True)` (the default) detects
-the signature (`nsamp == 1 and nsig > 1`) and drops those records, printing the
-count. Pass `False` to reproduce the unfiltered cohort.
+The `.dat` payload of these records is **all zeros** (verified: 48/48 PPG,
+38/48 ECG), so nothing is lost by ignoring it -- the waveform is carried
+entirely by the per-sample gain/baseline pairs. Applying the standard WFDB
+conversion element-wise recovers it:
 
-**Cost of the exclusion -- state both numbers, they differ a lot:**
+```
+physical[i] = (digital[i] - baseline[i]) / gain[i]
+```
 
-- **48 / 3,888 records excluded (1.2%)**
-- but **50 -> 38 subjects (24% of subjects lost)**, because every recording
-  belonging to those 12 release-1 subjects had a bad header.
+**Validated against an independent label.** Record 100001's recovered PPG has a
+dominant autocorrelation period of 0.733 s = **81.8 bpm**, against the
+**83 bpm** reference in quality-hr-ann.csv -- a 1.4% error. That agreement with
+a label we did not use in the reconstruction is what establishes this is the
+real signal rather than decoded noise.
 
-Resulting cohort: **3,840 visits / 38 subjects**; subject-disjoint splits
-train 2,688 / val 636 / test 516. HR labels: n=3,840, mean 78.0 bpm,
-range 38-161. Native quality labels are imbalanced: **3,045 poor / 795 good
-(79% poor)** -- expected, since this is the real-motion-artifact source.
+An earlier iteration of this adapter EXCLUDED these records. That was rejected:
+it cost **24% of subjects (50 -> 38)** to remove **1.2% of records**, because
+all recordings of 12 release-1 subjects are affected. Reconstruction keeps the
+full **3,888 records / 50 subjects**.
+
+### Reconstruction fidelity is annotated, not assumed
+
+Recovery quality varies. Over the 48 records, PPG-derived HR vs. the reference
+annotation gives **median error 3.9%**, but with a long tail (**29/48 within
+10%**; mean ~37%). `build_but_ppg_cohort` therefore adds two columns:
+
+| column | meaning |
+|---|---|
+| `reconstructed` | True for the 48 release-1 records |
+| `reconstruction_hr_err_pct` | \|recovered HR - reference HR\| / reference * 100; NaN otherwise |
+
+**Nothing is dropped.** Consumers that depend on faithful morphology should
+filter on `reconstruction_hr_err_pct` themselves. This matters most for
+`trustbio/degradation/calibrate.py`: BUT PPG's role in this study is calibrating
+the synthetic degradation model against REAL motion artifact, so admitting
+low-fidelity reconstructions there could contaminate the calibration the whole
+degradation analysis rests on -- silently, since nothing would raise.
+
+Resulting cohort: **3,888 visits / 50 subjects**; subject-disjoint splits
+train 2,634 / val 602 / test 652. HR labels: n=3,888, mean 78.1 bpm,
+range 38-161. Native quality labels remain imbalanced (~79% poor), as expected
+for the real-motion-artifact source.
+
+Note also: 10 of the 48 have a **non-zero ECG .dat**, i.e. a third variant. The
+reader uses the .dat samples when present and non-zero, and zeros otherwise, so
+both variants are handled by one code path.
 
 ## CSV column names
 

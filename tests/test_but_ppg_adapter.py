@@ -95,23 +95,49 @@ def test_cohort_accepts_real_csv_column_names(fake_but_ppg_root):
     assert labels["hr_regression"].notna().all()
 
 
-def test_cohort_excludes_malformed_transposed_headers(fake_but_ppg_root):
-    """48 real BUT PPG records declare `nsig nsamp` transposed (300 signals of
-    1 sample). wfdb returns a single garbage sample instead of raising, so the
-    cohort builder must drop them rather than let them poison features."""
-    root, quality_hr = fake_but_ppg_root
-    # Corrupt 100002's header the way the real dataset does.
-    hea = root / "100002" / "100002_PPG.hea"
-    lines = hea.read_text().splitlines()
-    name, nsig, fs, nsamp = lines[0].split()[:4]
-    lines[0] = f"{name} {nsamp} {fs} 1"   # transpose nsig/nsamp
+def _make_release1_record(root, rec_id, n_samples, fs, values):
+    """Rewrite `rec_id`'s PPG record in BUT PPG release-1's broken encoding:
+    header declares `<n_samples> <fs> 1` (one spec line PER SAMPLE, carrying the
+    sample value in its gain/baseline fields) and the .dat is all zeros."""
+    rec_dir = root / rec_id
+    hea = rec_dir / f"{rec_id}_PPG.hea"
+    lines = [f"{rec_id}_PPG {n_samples} {fs} 1"]
+    for v in values:
+        # physical = (0 - baseline)/gain  ->  choose baseline=-v, gain=1
+        lines.append(f"{rec_id}_PPG.dat 16 1.0({int(-round(v))})/a.u. 0 0 0 0 0 ")
     hea.write_text("\n".join(lines) + "\n")
+    (rec_dir / f"{rec_id}_PPG.dat").write_bytes(b"\x00\x00" * n_samples)
+
+
+def test_release1_records_are_reconstructed_not_dropped(fake_but_ppg_root):
+    """The 48 real release-1 records store their waveform in the header's
+    per-sample gain fields with an all-zero .dat. They must be RECONSTRUCTED and
+    retained -- dropping them would cost 24% of subjects (50 -> 38) for 1.2% of
+    records, since every recording of 12 subjects is affected."""
+    import numpy as np
+    from trustbio.data.but_ppg import is_release1_record, make_but_ppg_signal_loader
+
+    root, quality_hr = fake_but_ppg_root
+    fs, n = 30, 300
+    # A clean 1 Hz sine at 30 Hz -> recoverable, physiologically periodic.
+    values = 100.0 + 50.0 * np.sin(2 * np.pi * np.arange(n) / fs)
+    _make_release1_record(root, "100002", n, fs, values)
+
+    assert is_release1_record(root, "100002") is True
+    assert is_release1_record(root, "112001") is False
 
     cohort = build_but_ppg_cohort(root, quality_hr_csv=quality_hr)
-    assert "100002" not in set(cohort.visits["visit_id"])
-    assert set(cohort.visits["visit_id"]) == {"100001", "112001"}
+    # nothing dropped
+    assert set(cohort.visits["visit_id"]) == {"100001", "100002", "112001"}
+    v = cohort.visits.set_index("visit_id")
+    assert bool(v.loc["100002", "reconstructed"]) is True
+    assert bool(v.loc["112001", "reconstructed"]) is False
+    # fidelity recorded for reconstructed rows, NaN for the others
+    assert np.isnan(v.loc["112001", "reconstruction_hr_err_pct"])
 
-    kept = build_but_ppg_cohort(
-        root, quality_hr_csv=quality_hr, drop_malformed_headers=False
-    )
-    assert "100002" in set(kept.visits["visit_id"])
+    # the reconstruction recovers the full sample count, not a single sample
+    load = make_but_ppg_signal_loader(root)
+    sig, got_fs = load("100002", "ppg")
+    assert got_fs == fs
+    assert len(sig) == n, f"expected {n} samples, got {len(sig)} (the old bug)"
+    assert np.ptp(sig) > 0, "reconstructed signal must not be constant"
