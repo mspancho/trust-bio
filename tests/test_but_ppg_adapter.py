@@ -74,3 +74,44 @@ def test_label_table_has_hr(fake_but_ppg_root):
     labels = build_but_ppg_label_table(quality_hr, visit_ids=["100001", "100002", "112001"])
     assert list(labels.columns) == ["hr_regression"]
     assert labels.loc["100001", "hr_regression"] == 70.0
+
+
+def test_cohort_accepts_real_csv_column_names(fake_but_ppg_root):
+    """PhysioNet's published quality-hr-ann.csv header is `ID,Quality,HR`
+    (title case, BOM-prefixed), not the lowercase names the other fixtures
+    use. Earlier code only survived this by positional-column luck."""
+    root, quality_hr = fake_but_ppg_root
+    real_style = quality_hr.rename(
+        columns={"signal_id": "ID", "quality": "Quality", "hr": "HR"}
+    )
+    cohort = build_but_ppg_cohort(root, quality_hr_csv=real_style)
+    assert set(cohort.visits["visit_id"]) == {"100001", "100002", "112001"}
+    assert "quality" in cohort.visits.columns
+
+    labels = build_but_ppg_label_table(
+        real_style, visit_ids=["100001", "100002", "112001"]
+    )
+    assert list(labels.columns) == ["hr_regression"]
+    assert labels["hr_regression"].notna().all()
+
+
+def test_cohort_excludes_malformed_transposed_headers(fake_but_ppg_root):
+    """48 real BUT PPG records declare `nsig nsamp` transposed (300 signals of
+    1 sample). wfdb returns a single garbage sample instead of raising, so the
+    cohort builder must drop them rather than let them poison features."""
+    root, quality_hr = fake_but_ppg_root
+    # Corrupt 100002's header the way the real dataset does.
+    hea = root / "100002" / "100002_PPG.hea"
+    lines = hea.read_text().splitlines()
+    name, nsig, fs, nsamp = lines[0].split()[:4]
+    lines[0] = f"{name} {nsamp} {fs} 1"   # transpose nsig/nsamp
+    hea.write_text("\n".join(lines) + "\n")
+
+    cohort = build_but_ppg_cohort(root, quality_hr_csv=quality_hr)
+    assert "100002" not in set(cohort.visits["visit_id"])
+    assert set(cohort.visits["visit_id"]) == {"100001", "112001"}
+
+    kept = build_but_ppg_cohort(
+        root, quality_hr_csv=quality_hr, drop_malformed_headers=False
+    )
+    assert "100002" in set(kept.visits["visit_id"])
