@@ -80,15 +80,46 @@ def make_authenticated_opener(username: str, password: str):
 
 
 def download(opener, url: str, dest: Path) -> bool:
-    """GET one file. Returns True on success, False on a reported failure."""
+    """GET one file, RESUMING a partial .part if present.
+
+    PhysioNet honours byte ranges (verified: a range request on metadata.csv
+    returns `content-range: bytes 0-0/4919648345`), and that matters a lot here
+    -- metadata.csv alone is 4.92 GB and downloads at only ~5-11 MB/min, so a
+    restart-from-zero cannot finish inside a 6-hour wall limit. Without Range
+    support a timed-out job loops forever, re-fetching the same first gigabytes.
+    """
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
+    have = tmp.stat().st_size if tmp.exists() else 0
+
+    req = urllib.request.Request(url)
+    if have:
+        req.add_header("Range", f"bytes={have}-")
+
     try:
-        with opener.open(url, timeout=300) as resp, open(tmp, "wb") as out:
-            while chunk := resp.read(1 << 20):
-                out.write(chunk)
-    except (urllib.error.HTTPError, urllib.error.URLError, OSError) as exc:
-        tmp.unlink(missing_ok=True)
+        with opener.open(req, timeout=300) as resp:
+            # 206 = server honoured the range; 200 = it ignored it and is
+            # sending the whole file, so we must start over rather than append.
+            if have and resp.status == 200:
+                print(f"[fetch_mimic_ext_ppg]   server ignored Range; restarting "
+                      f"{dest.name}", flush=True)
+                have = 0
+            mode = "ab" if have else "wb"
+            if have:
+                print(f"[fetch_mimic_ext_ppg]   resuming {dest.name} at "
+                      f"{have/1e9:.2f} GB", flush=True)
+            with open(tmp, mode) as out:
+                while chunk := resp.read(1 << 20):
+                    out.write(chunk)
+    except urllib.error.HTTPError as exc:
+        # 416 = we already hold the whole file; treat as complete.
+        if exc.code == 416 and have:
+            tmp.replace(dest)
+            return True
+        print(f"[fetch_mimic_ext_ppg]   FAILED {url}: {exc}", file=sys.stderr, flush=True)
+        return False
+    except (urllib.error.URLError, OSError) as exc:
+        # Keep the .part so the next run can resume from here.
         print(f"[fetch_mimic_ext_ppg]   FAILED {url}: {exc}", file=sys.stderr, flush=True)
         return False
     tmp.replace(dest)
