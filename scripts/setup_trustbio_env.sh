@@ -26,6 +26,19 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 module load conda/miniforge3/24.11.3-0 2>/dev/null || true
 module load gcc/14.2.0 cuda/12.8 2>/dev/null || true
 
+# ~/.cache is a symlink to ./scratch/.cache -> /n/scratch/users/m/map9592, which
+# O2 has purged, so it is a DANGLING symlink: anything defaulting to ~/.cache
+# dies with "Permission denied". That already cost us the HuggingFace token and
+# blocked conda env creation outright. Point every cache at durable lab storage.
+CACHE_ROOT="${TRUSTBIO_CACHE_ROOT:-/n/data1/hms/dbmi/rajpurkar/lab/home/map9592/.caches}"
+mkdir -p "${CACHE_ROOT}"/{conda,pip,hf,mpl,xdg}
+export CONDA_PKGS_DIRS="${CACHE_ROOT}/conda"
+export PIP_CACHE_DIR="${CACHE_ROOT}/pip"
+export HF_HOME="${CACHE_ROOT}/hf"
+export MPLCONFIGDIR="${CACHE_ROOT}/mpl"
+export XDG_CACHE_HOME="${CACHE_ROOT}/xdg"
+echo "[setup] caches -> ${CACHE_ROOT} (NOT ~/.cache, which dangles into purged scratch)"
+
 # Python 3.11: xecg requires >=3.11, and the pinned torch/transformers stack
 # below has no wheels for 3.13+.
 if ! conda env list | grep -qE "^${ENV_NAME}\s"; then
@@ -60,9 +73,15 @@ run python -m pip install "transformers==4.43.3" "tokenizers==0.19.1" \
 run python -m pip install --no-deps momentfm chronos-forecasting
 run python -m pip install einops omegaconf xlstm
 
-# Signal-processing extras (optional: the domain-feature baselines).
-run python -m pip install neurokit2 pyPPG || \
-  echo "[setup] WARNING: neurokit2/pyPPG failed; domain-feature models will skip"
+# Signal-processing extras (the domain-feature baselines).
+# --no-deps is REQUIRED here: neurokit2 pulls numpy>=2, which would silently
+# break the numpy==1.26.4 pin the vendored FMs depend on (and a plain install
+# also tries to rebuild scipy from source, which fails). PyWavelets is
+# neurokit2's one genuinely needed extra.
+run python -m pip install --no-deps neurokit2 PyWavelets || \
+  echo "[setup] WARNING: neurokit2 failed; ecg-domain baseline will skip"
+run python -m pip install --no-deps pyPPG || \
+  echo "[setup] WARNING: pyPPG failed; ppg-domain baseline will skip"
 
 run python -m pip install pytest
 
