@@ -23,6 +23,7 @@ allow_fallback=True to substitute a deterministic stand-in for plumbing.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import sys
@@ -41,6 +42,35 @@ MODEL_REPOS_DIR = Path(
     )
 )
 DEFAULT_BATCH_SIZE = 32
+
+
+@contextlib.contextmanager
+def _torch_load_weights_only_false():
+    """Temporarily restore torch.load's pre-2.6 `weights_only=False` default.
+
+    PyTorch 2.6 changed the default to True, which raises
+    `UnpicklingError: Weights only load failed` on checkpoints that pickle
+    anything beyond plain tensors. Some vendored model repos call torch.load
+    internally, and we mirror those repos rather than patching them, so scope
+    the old behaviour to just the wrapped load.
+
+    Only use this around checkpoints WE vendored (model_weights/), never around
+    arbitrary downloaded input -- weights_only=True exists to stop a malicious
+    checkpoint executing code at load time.
+    """
+    import torch
+
+    original = torch.load
+
+    def _patched(*args, **kwargs):
+        kwargs.setdefault("weights_only", False)
+        return original(*args, **kwargs)
+
+    torch.load = _patched
+    try:
+        yield
+    finally:
+        torch.load = original
 
 
 def _add_repo_to_path(name: str) -> Path:
@@ -262,7 +292,17 @@ class ECGFounderExtractor(_FMBase):
             from finetune_model import ft_1lead_ECGFounder
         except Exception as e:
             return self._use_fallback(f"ECGFounder repo not importable ({e})")
-        self._model = ft_1lead_ECGFounder(self.device, self.checkpoint, 1, linear_prob=False)
+        # PyTorch 2.6 flipped torch.load's `weights_only` default to True, which
+        # breaks this checkpoint with "UnpicklingError: Weights only load
+        # failed". The torch.load call lives inside the vendored third-party
+        # repo (finetune_model.py), which we mirror rather than patch, so restore
+        # the old default around just this call. Safe here: the checkpoint is one
+        # we vendored ourselves (model_weights/1_lead_ECGFounder.pth), not
+        # arbitrary remote input.
+        with _torch_load_weights_only_false():
+            self._model = ft_1lead_ECGFounder(
+                self.device, self.checkpoint, 1, linear_prob=False
+            )
         self._model.return_features = True
         self._model.eval()
         return self

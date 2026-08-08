@@ -18,6 +18,17 @@ conda run -n "${ENV_NAME}" python -m pip install torch --index-url https://downl
 conda run -n "${ENV_NAME}" python -m pip install --no-deps \
   momentfm chronos-forecasting umap-learn pynndescent numba llvmlite || \
   echo "[setup] WARNING: some FM backends failed"
+# --no-deps above keeps those backends from dragging in their own (often
+# conflicting) torch pins, but it also skips dependencies the models genuinely
+# need at import time. Installing them explicitly, because without these FIVE of
+# the seven models silently fail to load and the pipeline substitutes a random-
+# projection fallback -- a run that looks green while measuring nothing real:
+#   einops     -> chronos-bolt
+#   omegaconf  -> D-BETA
+#   xlstm      -> xECG
+#   (einops is also required by papagei's models.resnet)
+conda run -n "${ENV_NAME}" python -m pip install einops omegaconf xlstm || \
+  echo "[setup] WARNING: FM runtime deps failed; chronos/D-BETA/xECG/papagei will fall back"
 conda run -n "${ENV_NAME}" python -m pip install huggingface_hub || \
   echo "[setup] WARNING: huggingface_hub install failed; D-BETA's gate check will fall back to env-var-only detection"
 
