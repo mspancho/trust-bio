@@ -91,8 +91,8 @@ def _load_subject_windows(path: Path, file_ext: str) -> dict:
     if file_ext == "npz":
         data = np.load(path)
         return {
-            "ecg": np.asarray(data["ecg_raw"])[:, 0, :].astype(np.float32),
-            "ppg": np.asarray(data["ppg_raw"])[:, 0, :].astype(np.float32),
+            "ecg": _as_window_matrix(data["ecg_raw"]),
+            "ppg": _as_window_matrix(data["ppg_raw"]),
             "sbp": np.asarray(data["seg_sbp"], dtype=np.float64).ravel(),
             "dbp": np.asarray(data["seg_dbp"], dtype=np.float64).ravel(),
             "include_flag": np.asarray(data["include_flag"], dtype=bool).ravel(),
@@ -101,12 +101,44 @@ def _load_subject_windows(path: Path, file_ext: str) -> dict:
     raw = loadmat(str(path))
     wins = raw["Subj_Wins"]
     return {
-        "ecg": np.asarray(wins["ECG_Raw"])[:, 0, :].astype(np.float32),
-        "ppg": np.asarray(wins["PPG_Raw"])[:, 0, :].astype(np.float32),
+        "ecg": _as_window_matrix(wins["ECG_Raw"]),
+        "ppg": _as_window_matrix(wins["PPG_Raw"]),
         "sbp": np.asarray(wins["SegSBP"], dtype=np.float64).ravel(),
         "dbp": np.asarray(wins["SegDBP"], dtype=np.float64).ravel(),
         "include_flag": np.asarray(wins["IncludeFlag"], dtype=bool).ravel(),
     }
+
+
+def _as_window_matrix(arr) -> np.ndarray:
+    """Normalise a PulseDB signal field to (n_windows, n_samples) float32.
+
+    Real PulseDB is NOT uniformly 3-D, despite Task 7's two-file inspection
+    suggesting `(n_windows, 1, 1250)`. Measured across a 150-file stratified
+    sample of the real 2,423-file PulseDB_MIMIC set
+    (scripts/probe_pulsedb_shapes.py):
+
+        3-D (n_windows, 1, 1250) : 141 files
+        1-D (1250,)              :   9 files   <- all with IncludeFlag size 1
+
+    The 1-D files are SINGLE-WINDOW subjects: MATLAB/mat73 drops the leading
+    singleton dimensions, so `(1, 1, 1250)` arrives as `(1250,)`. Hardcoding
+    `[:, 0, :]` therefore raised
+    `IndexError: too many indices for array` on ~6% of subjects, which is why
+    the real cohort could not be built at all.
+
+    Last-axis length was 1250 for every file sampled, so samples always live on
+    the final axis and any middle axis is a squeezable channel dimension.
+    """
+    a = np.asarray(arr)
+    if a.ndim == 1:            # single window, fully squeezed -> (1, n_samples)
+        a = a[None, :]
+    elif a.ndim == 3:          # (n_windows, 1, n_samples) -> drop channel axis
+        a = a[:, 0, :]
+    elif a.ndim != 2:          # 2-D is already (n_windows, n_samples)
+        raise ValueError(
+            f"unexpected PulseDB signal array with ndim={a.ndim}, shape={a.shape}"
+        )
+    return a.astype(np.float32)
 
 
 def _parse_visit_id(visit_id: str) -> tuple[str, int]:

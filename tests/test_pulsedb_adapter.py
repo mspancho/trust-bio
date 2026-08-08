@@ -178,3 +178,37 @@ def test_pulsedb_paths_properties(tmp_path):
     paths = PulseDBPaths(tmp_path)
     assert paths.mimic_dir == tmp_path / "Segment_Files" / "PulseDB_MIMIC"
     assert paths.vital_dir == tmp_path / "Segment_Files" / "PulseDB_Vital"
+
+
+def test_single_window_subject_loads_despite_squeezed_dims(tmp_path):
+    """Real PulseDB single-window subjects arrive 1-D, not (1, 1, 1250).
+
+    Measured on the real 2,423-file PulseDB_MIMIC set: 9 of 150 sampled files
+    (~6%) store ECG_Raw/PPG_Raw as (1250,) rather than (n_windows, 1, 1250) --
+    every one of them a subject with IncludeFlag size 1, i.e. MATLAB/mat73
+    squeezing the leading singleton dims away. The old hardcoded `[:, 0, :]`
+    raised IndexError on those, which made the real cohort unbuildable.
+    """
+    import numpy as np
+    from trustbio.data.pulsedb import _as_window_matrix, PULSEDB_SEGMENT_SEC, PULSEDB_FS
+
+    n = PULSEDB_SEGMENT_SEC * PULSEDB_FS   # 1250
+
+    # 1-D: the squeezed single-window case that broke the real load
+    one = _as_window_matrix(np.arange(n, dtype=np.float64))
+    assert one.shape == (1, n)
+    assert one.dtype == np.float32
+    assert one[0, 5] == 5.0, "samples must be preserved, not reordered"
+
+    # 3-D: the common multi-window case
+    three = _as_window_matrix(np.zeros((7, 1, n)))
+    assert three.shape == (7, n)
+
+    # 2-D: already (n_windows, n_samples)
+    two = _as_window_matrix(np.zeros((4, n)))
+    assert two.shape == (4, n)
+
+    # anything else is a genuine surprise and must not be silently reshaped
+    import pytest
+    with pytest.raises(ValueError, match="unexpected PulseDB signal array"):
+        _as_window_matrix(np.zeros((2, 2, 2, n)))
