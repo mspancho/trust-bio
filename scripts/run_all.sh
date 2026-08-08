@@ -9,7 +9,7 @@
 set -euo pipefail
 
 export TRUSTBIO_REPO="${TRUSTBIO_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-export TRUSTBIO_ENV="${TRUSTBIO_ENV:-map-env-base}"
+export TRUSTBIO_ENV="${TRUSTBIO_ENV:-trust-bio}"
 export TRUSTBIO_STORE="${TRUSTBIO_STORE:-${TRUSTBIO_REPO}/features_cache}"
 export TRUSTBIO_OUT="${TRUSTBIO_OUT:-${TRUSTBIO_REPO}/results}"
 export TRUSTBIO_DURATION="${TRUSTBIO_DURATION:-600}"

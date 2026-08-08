@@ -7,7 +7,7 @@
 #SBATCH --output=logs/cohort_%j.out
 #SBATCH --error=logs/cohort_%j.err
 set -euo pipefail
-ENV_NAME="${TRUSTBIO_ENV:-map-env-base}"
+ENV_NAME="${TRUSTBIO_ENV:-trust-bio}"
 REPO_DIR="${TRUSTBIO_REPO:-$(pwd)}"
 STORE="${TRUSTBIO_STORE:-${REPO_DIR}/features_cache}"
 

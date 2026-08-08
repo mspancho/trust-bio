@@ -7,7 +7,7 @@
 #SBATCH --output=logs/taxonomy_%j.out
 #SBATCH --error=logs/taxonomy_%j.err
 set -euo pipefail
-ENV_NAME="${TRUSTBIO_ENV:-map-env-base}"
+ENV_NAME="${TRUSTBIO_ENV:-trust-bio}"
 REPO_DIR="${TRUSTBIO_REPO:-$(pwd)}"
 OUT="${TRUSTBIO_OUT:-${REPO_DIR}/results}"
 FEATURES_NPZ="${TRUSTBIO_TAXONOMY_FEATURES:-${OUT}/fault_features.npz}"

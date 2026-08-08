@@ -89,6 +89,16 @@ def download(opener, url: str, dest: Path) -> bool:
     support a timed-out job loops forever, re-fetching the same first gigabytes.
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
+
+    # Already complete? Do NOT re-download. Without this the metadata loop
+    # re-fetched metadata.csv (4.92 GB) and SHA256SUMS.txt (1.27 GB) on EVERY
+    # run -- at PhysioNet's ~12 MB/min that burns hours before a single waveform
+    # is touched, and then overwrites a known-good file. Observed: a fetch that
+    # looked "stalled at 0 waveforms" for an hour was in fact 1.8 GB into
+    # re-downloading a metadata.csv we already had complete on disk.
+    if dest.exists() and dest.stat().st_size > 0:
+        return True
+
     tmp = dest.with_suffix(dest.suffix + ".part")
     have = tmp.stat().st_size if tmp.exists() else 0
 

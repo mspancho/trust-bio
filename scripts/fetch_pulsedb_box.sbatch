@@ -15,4 +15,4 @@ REPO=/n/data1/hms/dbmi/rajpurkar/lab/home/map9592/trust-bio
 mkdir -p "${REPO}/logs"
 cd "${REPO}"
 module load conda/miniforge3/24.11.3-0 2>/dev/null || true
-conda run -n map-env-base python scripts/fetch_pulsedb_box.py
+conda run -n trust-bio python scripts/fetch_pulsedb_box.py

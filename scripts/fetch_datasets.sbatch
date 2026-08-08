@@ -11,7 +11,7 @@
 # PHYSIONET_PASSWORD in the environment (credentialed access, already granted);
 # BUT PPG and PulseDB need no credentials.
 set -euo pipefail
-ENV_NAME="${TRUSTBIO_ENV:-map-env-base}"
+ENV_NAME="${TRUSTBIO_ENV:-trust-bio}"
 REPO_DIR="${TRUSTBIO_REPO:-$(pwd)}"
 
 module load conda/miniforge3/24.11.3-0 2>/dev/null || true

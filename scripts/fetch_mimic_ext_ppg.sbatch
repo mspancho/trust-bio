@@ -38,7 +38,7 @@ esac
 ARGS="${FETCH_ARGS-${DEFAULT_ARGS}}"
 echo "[sbatch] FETCH_MODE=${FETCH_MODE-metadata}  ARGS='${ARGS}'"
 
-conda run -n map-env-base python scripts/fetch_mimic_ext_ppg.py ${ARGS}
+conda run -n trust-bio python scripts/fetch_mimic_ext_ppg.py ${ARGS}
 rc=$?
 
 if [[ $rc -ne 0 ]]; then

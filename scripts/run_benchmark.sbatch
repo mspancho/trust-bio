@@ -7,7 +7,7 @@
 #SBATCH --output=logs/benchmark_%j.out
 #SBATCH --error=logs/benchmark_%j.err
 set -euo pipefail
-ENV_NAME="${TRUSTBIO_ENV:-map-env-base}"
+ENV_NAME="${TRUSTBIO_ENV:-trust-bio}"
 REPO_DIR="${TRUSTBIO_REPO:-$(pwd)}"
 STORE="${TRUSTBIO_STORE:-${REPO_DIR}/features_cache}"
 OUT="${TRUSTBIO_OUT:-${REPO_DIR}/results}"

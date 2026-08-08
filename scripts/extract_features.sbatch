@@ -14,7 +14,7 @@
 set -euo pipefail
 
 MANIFEST="${1:-${TRUSTBIO_MANIFEST:-manifest_extract.txt}}"
-ENV_NAME="${TRUSTBIO_ENV:-map-env-base}"
+ENV_NAME="${TRUSTBIO_ENV:-trust-bio}"
 REPO_DIR="${TRUSTBIO_REPO:-$(pwd)}"
 STORE="${TRUSTBIO_STORE:-${REPO_DIR}/features_cache}"
 
