@@ -147,17 +147,67 @@ def _parse_visit_id(visit_id: str) -> tuple[str, int]:
     return subject_id, int(win_part)
 
 
+#: Plausible human heart rate, used to reject spurious inter-beat intervals.
+_HR_MIN_BPM, _HR_MAX_BPM = 25.0, 220.0
+
+
 def _estimate_hr_from_ecg(ecg: np.ndarray, fs: int) -> float:
-    """Simple peak-interval heart-rate estimate: bandpass -> find_peaks -> HR."""
+    """QRS-interval heart-rate estimate, validated against reference HR.
+
+    The previous implementation (0.5-40 Hz band, `find_peaks` with only a
+    distance constraint, MEAN inter-beat interval) produced labels containing NO
+    heart-rate information. Measured against BUT PPG's 400 human-annotated
+    good-quality records:
+
+        old: mean 133.0 bpm, MAE 60.5 bpm, 7.0% within 10%, corr -0.023
+        new: mean  73.2 bpm, MAE  1.0 bpm, 97.8% within 10%, corr +0.944
+        (reference mean 72.5 bpm)
+
+    and against PulseDB's own ABP pulse rate at its native 125 Hz:
+
+        old: mean 134.6 bpm, MAE 65.9 bpm,   0% within 10%, corr +0.823
+        new: mean  68.7 bpm, MAE  0.3 bpm, 100% within 10%, corr +0.994
+        (ABP anchor mean 68.7 bpm)
+
+    The old estimator's +0.823 correlation against ABP while reading ~2x too
+    high is the signature of T-wave double-counting: it tracked heart rate but
+    counted roughly two beats per cardiac cycle.
+
+    Three changes, each load-bearing:
+      * 5-15 Hz band isolates QRS energy; 0.5-40 Hz passed T-waves through.
+      * a prominence threshold rejects T-waves and noise, where the old
+        `find_peaks` accepted ANY local maximum as a beat.
+      * MEDIAN of physiologically plausible intervals, so a handful of spurious
+        peaks cannot drag the estimate, unlike the old mean over all intervals.
+    """
     if len(ecg) < fs * 2:
         return float("nan")
-    b, a = scipy.signal.butter(3, [0.5, 40], btype="bandpass", fs=fs)
+
+    lo, hi = 5.0, min(15.0, fs / 2.0 - 0.1)   # keep below Nyquist (62.5 Hz @125)
+    if hi <= lo:
+        return float("nan")
+    b, a = scipy.signal.butter(3, [lo, hi], btype="bandpass", fs=fs)
     filtered = scipy.signal.filtfilt(b, a, ecg)
-    peaks, _ = scipy.signal.find_peaks(filtered, distance=fs * 0.33)  # <=180 bpm
+
+    scale = np.std(filtered)
+    if not np.isfinite(scale) or scale == 0:
+        return float("nan")
+    filtered = filtered / scale
+
+    # abs(): R peaks invert depending on lead polarity, so match either sign.
+    peaks, _ = scipy.signal.find_peaks(
+        np.abs(filtered),
+        distance=max(1, int(fs * 60.0 / _HR_MAX_BPM)),
+        prominence=1.0,                        # in std units, post-normalisation
+    )
     if len(peaks) < 2:
         return float("nan")
+
     ibi_sec = np.diff(peaks) / fs
-    return float(60.0 / np.mean(ibi_sec))
+    ibi_sec = ibi_sec[(ibi_sec > 60.0 / _HR_MAX_BPM) & (ibi_sec < 60.0 / _HR_MIN_BPM)]
+    if len(ibi_sec) == 0:
+        return float("nan")
+    return float(60.0 / np.median(ibi_sec))
 
 
 def _read_include_flag_only(path: Path, file_ext: str) -> np.ndarray:
@@ -272,12 +322,36 @@ def make_pulsedb_signal_loader(root: str | Path, source: str, file_ext: str = "m
     return load
 
 
+def label_cache_path(store: str | Path, source: str) -> Path:
+    """Where a built PulseDB label table is cached (see build_pulsedb_label_table)."""
+    return Path(store) / f"pulsedb_{source}_labels.csv"
+
+
 def build_pulsedb_label_table(
     root: str | Path, source: str, visit_ids: list[str], file_ext: str = "mat",
+    cache: str | Path | None = None, rebuild: bool = False,
 ) -> pd.DataFrame:
     """Wide label table: hr_regression (derived from that window's ECG),
     sbp_regression, dbp_regression (that window's SegSBP/SegDBP), indexed by
-    visit_id."""
+    visit_id.
+
+    CACHING (`cache=<dir>`): hr_regression is DERIVED, not stored -- every window
+    needs its ECG loaded and peak-detected, which means opening each subject's
+    ~287 MB .mat. Measured on the 100-subject pilot: 700 s for PulseDB_MIMIC and
+    268 s for Vital, ~16 min total, and that cost would be repeated by EVERY task
+    in an extraction array. Pass `cache` to compute once and reuse; a cached
+    table is filtered to the requested visit_ids, and any visit missing from the
+    cache triggers a full rebuild so a stale cache can't silently drop windows.
+    """
+    cache_file = label_cache_path(cache, source) if cache is not None else None
+    if cache_file is not None and cache_file.exists() and not rebuild:
+        cached = pd.read_csv(cache_file, dtype={"visit_id": str}).set_index("visit_id")
+        wanted = pd.Index(visit_ids, name="visit_id")
+        if wanted.isin(cached.index).all():
+            return cached.reindex(wanted)
+        print(f"[pulsedb] label cache {cache_file.name} is missing "
+              f"{(~wanted.isin(cached.index)).sum():,} requested visits; rebuilding")
+
     paths = PulseDBPaths(Path(root))
     cache: dict[str, dict] = {}
     rows = []
@@ -300,4 +374,11 @@ def build_pulsedb_label_table(
             index=pd.Index([], name="visit_id"),
             dtype="float64",
         )
-    return pd.DataFrame(rows).set_index("visit_id")
+    out = pd.DataFrame(rows).set_index("visit_id")
+
+    if cache_file is not None:
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        out.to_csv(cache_file)
+        print(f"[pulsedb] cached {len(out):,} labels -> {cache_file}")
+
+    return out

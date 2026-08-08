@@ -210,11 +210,19 @@ def _has_huggingface_access() -> bool:
     # `get_token()` is the current API; `HfFolder.get_token()` is the legacy one
     # and is GONE in recent huggingface_hub (>=1.0), so try the modern name
     # first -- relying on HfFolder alone silently disabled this whole fallback.
+    # Catch Exception, not only ImportError: reading the cached token touches the
+    # filesystem, and on this cluster ~/.cache is a DANGLING symlink into purged
+    # /n/scratch, so get_token() raises PermissionError instead of returning
+    # None. A narrow `except ImportError` let that propagate and crash the
+    # caller. Availability detection must degrade to "no token available" --
+    # an unreadable token cache simply means we have no token.
     try:
         from huggingface_hub import get_token
         return get_token() is not None
     except ImportError:
         pass
+    except Exception:
+        return False
     try:
         from huggingface_hub import HfFolder
         return HfFolder.get_token() is not None

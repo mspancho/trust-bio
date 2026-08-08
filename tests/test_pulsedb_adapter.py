@@ -212,3 +212,47 @@ def test_single_window_subject_loads_despite_squeezed_dims(tmp_path):
     import pytest
     with pytest.raises(ValueError, match="unexpected PulseDB signal array"):
         _as_window_matrix(np.zeros((2, 2, 2, n)))
+
+
+def test_hr_estimator_recovers_known_rate():
+    """The HR estimator must recover a known rate from a synthetic ECG.
+
+    Guards a real defect: the original estimator (0.5-40 Hz band, find_peaks with
+    no prominence threshold, MEAN inter-beat interval) carried NO heart-rate
+    information at all -- validated against BUT PPG's 400 human-annotated
+    records it scored MAE 60.5 bpm with correlation -0.023, and against
+    PulseDB's own ABP pulse rate it read ~2x high (T-wave double-counting).
+    A synthetic ECG with a T-wave after every R peak reproduces exactly that
+    failure, so this test fails loudly if the fix is ever reverted.
+    """
+    import numpy as np
+    from trustbio.data.pulsedb import _estimate_hr_from_ecg
+
+    fs = PULSEDB_FS                      # 125 Hz, PulseDB's native rate
+    for true_bpm in (50.0, 72.0, 110.0):
+        n = fs * 10
+        t = np.arange(n) / fs
+        period = 60.0 / true_bpm
+        ecg = np.zeros(n, dtype=np.float64)
+        for beat in np.arange(0.2, t[-1], period):
+            # sharp R spike...
+            r = int(beat * fs)
+            if r < n:
+                ecg[max(0, r - 1):min(n, r + 2)] += [0.4, 1.0, 0.4][: min(n, r + 2) - max(0, r - 1)]
+            # ...followed by a broad T wave, the thing that fooled the old code
+            tc = beat + 0.30
+            ecg += 0.45 * np.exp(-0.5 * ((t - tc) / 0.06) ** 2)
+        est = _estimate_hr_from_ecg(ecg, fs)
+        assert abs(est - true_bpm) / true_bpm < 0.10, (
+            f"expected ~{true_bpm} bpm, got {est:.1f} "
+            f"(~2x suggests T-wave double-counting has returned)"
+        )
+
+
+def test_hr_estimator_rejects_unusable_input():
+    """Too-short or flat input must yield NaN, never a fabricated rate."""
+    import numpy as np
+    from trustbio.data.pulsedb import _estimate_hr_from_ecg
+
+    assert np.isnan(_estimate_hr_from_ecg(np.zeros(10), PULSEDB_FS))       # too short
+    assert np.isnan(_estimate_hr_from_ecg(np.zeros(PULSEDB_FS * 10), PULSEDB_FS))  # flat

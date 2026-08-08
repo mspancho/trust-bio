@@ -78,7 +78,15 @@ def build_dataset_handle(
         )
         splits = {s: cohort.split(s) for s in ("train", "val", "test")}
         loader = make_pulsedb_signal_loader(args.pulsedb_root, source="mimic")
-        labels = {s: build_pulsedb_label_table(args.pulsedb_root, "mimic", df["visit_id"].tolist())
+        # Build ONCE across all splits and slice, rather than three separate
+        # passes: hr_regression is derived from ECG, so each call reopens the
+        # subject .mat files (~16 min for the 100-subject pilot).
+        _all_ids = [v for df in splits.values() for v in df["visit_id"].tolist()]
+        _labels = build_pulsedb_label_table(
+            args.pulsedb_root, "mimic", _all_ids,
+            cache=getattr(args, "cohort_cache", None),
+        )
+        labels = {s: _labels.reindex(df["visit_id"].tolist())
                   for s, df in splits.items()}
     elif name == "pulsedb_vital":
         cohort = build_pulsedb_cohort(
@@ -87,7 +95,15 @@ def build_dataset_handle(
         )
         splits = {s: cohort.split(s) for s in ("train", "val", "test")}
         loader = make_pulsedb_signal_loader(args.pulsedb_root, source="vital")
-        labels = {s: build_pulsedb_label_table(args.pulsedb_root, "vital", df["visit_id"].tolist())
+        # Build ONCE across all splits and slice, rather than three separate
+        # passes: hr_regression is derived from ECG, so each call reopens the
+        # subject .mat files (~16 min for the 100-subject pilot).
+        _all_ids = [v for df in splits.values() for v in df["visit_id"].tolist()]
+        _labels = build_pulsedb_label_table(
+            args.pulsedb_root, "vital", _all_ids,
+            cache=getattr(args, "cohort_cache", None),
+        )
+        labels = {s: _labels.reindex(df["visit_id"].tolist())
                   for s, df in splits.items()}
     elif name == "mimic_ext_ppg":
         cohort = build_mimic_ext_ppg_cohort(args.mimic_ext_ppg_root)
