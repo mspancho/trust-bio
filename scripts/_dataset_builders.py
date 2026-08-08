@@ -33,6 +33,13 @@ def add_dataset_root_args(ap):
     ap.add_argument("--pulsedb-root", type=Path, default=PULSEDB_ROOT)
     ap.add_argument("--mimic-ext-ppg-root", type=Path, default=MIMIC_EXT_PPG_ROOT)
     ap.add_argument("--but-ppg-root", type=Path, default=BUT_PPG_ROOT)
+    ap.add_argument(
+        "--cohort-cache", type=Path, default=None,
+        help="directory holding cached cohort CSVs. Building a PulseDB cohort "
+             "opens every subject file (~8.7 h per institution, measured), so "
+             "downstream stages should point at a cache built once by "
+             "scripts/build_cohorts.py rather than re-scanning each run.",
+    )
     return ap
 
 
@@ -65,13 +72,19 @@ def build_dataset_handle(
     (which must include --pulsedb-root/--mimic-ext-ppg-root/--but-ppg-root, via
     add_dataset_root_args)."""
     if name == "pulsedb_mimic":
-        cohort = build_pulsedb_cohort(args.pulsedb_root, source="mimic")
+        cohort = build_pulsedb_cohort(
+            args.pulsedb_root, source="mimic",
+            cache=getattr(args, "cohort_cache", None),
+        )
         splits = {s: cohort.split(s) for s in ("train", "val", "test")}
         loader = make_pulsedb_signal_loader(args.pulsedb_root, source="mimic")
         labels = {s: build_pulsedb_label_table(args.pulsedb_root, "mimic", df["visit_id"].tolist())
                   for s, df in splits.items()}
     elif name == "pulsedb_vital":
-        cohort = build_pulsedb_cohort(args.pulsedb_root, source="vital")
+        cohort = build_pulsedb_cohort(
+            args.pulsedb_root, source="vital",
+            cache=getattr(args, "cohort_cache", None),
+        )
         splits = {s: cohort.split(s) for s in ("train", "val", "test")}
         loader = make_pulsedb_signal_loader(args.pulsedb_root, source="vital")
         labels = {s: build_pulsedb_label_table(args.pulsedb_root, "vital", df["visit_id"].tolist())

@@ -160,8 +160,34 @@ def _estimate_hr_from_ecg(ecg: np.ndarray, fs: int) -> float:
     return float(60.0 / np.mean(ibi_sec))
 
 
+def _read_include_flag_only(path: Path, file_ext: str) -> np.ndarray:
+    """Read ONLY the IncludeFlag of one subject file.
+
+    Cohort building needs nothing but the QC flag, yet `_load_subject_windows`
+    materialises every signal array too -- ~287 MB per file on the real data,
+    measured at 13.0 s/file, which is why a full scan takes ~8.7 h per
+    institution. mat73 has no lazy access, but h5py can read a single HDF5
+    dataset without touching the rest of the file.
+    """
+    if file_ext == "npz":
+        with np.load(path) as data:
+            return np.asarray(data["include_flag"], dtype=bool).ravel()
+    import h5py
+
+    with h5py.File(path, "r") as f:
+        # PulseDB v7.3 files are HDF5: /Subj_Wins/IncludeFlag
+        grp = f[list(f.keys())[0]] if "Subj_Wins" not in f else f["Subj_Wins"]
+        return np.asarray(grp["IncludeFlag"][()], dtype=bool).ravel()
+
+
+def cohort_cache_path(store: str | Path, source: str) -> Path:
+    """Where a built PulseDB cohort is cached (see `build_pulsedb_cohort`)."""
+    return Path(store) / f"pulsedb_{source}_cohort.csv"
+
+
 def build_pulsedb_cohort(
     root: str | Path, source: str, file_ext: str = "mat", seed: int = 0,
+    cache: str | Path | None = None, rebuild: bool = False,
 ) -> Cohort:
     """Build a subject-disjoint, per-window cohort for one PulseDB source
     ("mimic" or "vital").
@@ -176,17 +202,29 @@ def build_pulsedb_cohort(
 
     Splits are random (no meaningful chronological ordering exists across a
     de-identified multi-subject file set), 70/15/15 train/val/test.
+
+    CACHING (`cache=<dir>`): building this cohort means opening every subject
+    file, which on the real data is ~2,423 files / 411 GB for MIMIC alone --
+    measured at 8.7 h serial, and ~19 h for both institutions. Doing that once
+    per pipeline stage is infeasible, so pass `cache` to write/read a CSV and
+    pay the scan only once. `rebuild=True` forces a re-scan.
     """
+    cache_file = cohort_cache_path(cache, source) if cache is not None else None
+    if cache_file is not None and cache_file.exists() and not rebuild:
+        df = pd.read_csv(cache_file, dtype={"visit_id": str, "subject_id": str})
+        assert_no_subject_leakage(df)
+        return Cohort(visits=df.reset_index(drop=True))
+
     paths = PulseDBPaths(Path(root))
     files = _list_subject_files(paths, source, file_ext)
 
     rows = []
     for f in files:
         subject_id = _subject_id_from_path(f)
-        windows = _load_subject_windows(f, file_ext)
-        include_flag = windows["include_flag"]
-        n_windows = len(include_flag)
-        for w in range(n_windows):
+        # Only the QC flag is needed here -- reading the signal arrays too would
+        # move ~287 MB/file for nothing.
+        include_flag = _read_include_flag_only(f, file_ext)
+        for w in range(len(include_flag)):
             if not include_flag[w]:
                 continue
             rows.append({
@@ -200,6 +238,13 @@ def build_pulsedb_cohort(
         df, subject_col="subject_id", time_col=None, seed=seed,
     )
     assert_no_subject_leakage(df)
+
+    if cache_file is not None:
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(cache_file, index=False)
+        print(f"[pulsedb] cached {len(df):,} windows / "
+              f"{df['subject_id'].nunique():,} subjects -> {cache_file}")
+
     return Cohort(visits=df.reset_index(drop=True))
 
 
