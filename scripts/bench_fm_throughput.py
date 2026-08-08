@@ -20,6 +20,9 @@ ap.add_argument("--root", type=Path,
                 default=Path("/n/data1/hms/dbmi/rajpurkar/lab/datasets/pulsedb"))
 ap.add_argument("--source", default="mimic")
 ap.add_argument("--n-windows", type=int, default=64)
+ap.add_argument("--n-subjects", type=int, default=4,
+                help="spread the windows over this many subjects; the loader "
+                     "caches per subject, so this mirrors real extraction")
 ap.add_argument("--device", default="cuda")
 a = ap.parse_args()
 
@@ -28,7 +31,18 @@ dev = a.device if torch.cuda.is_available() else "cpu"
 print(f"device: {dev}"
       f"{' (' + torch.cuda.get_device_name(0) + ')' if dev=='cuda' else ''}", flush=True)
 
-df = pd.read_csv(a.cohort, dtype=str).sample(a.n_windows, random_state=0)
+# Sample windows from a FEW SUBJECTS, not uniformly at random. The loader
+# caches by subject, and a uniform sample of 64 windows out of 3.79M hits ~62
+# distinct subjects -- defeating the cache and charging a fresh ~287 MB file
+# read per window (measured: 18.9 s/window, which is a benchmark artifact, not
+# the pipeline's real cost). Real extraction walks a subject's windows together.
+_all = pd.read_csv(a.cohort, dtype=str)
+_subjects = _all["subject_id"].drop_duplicates().head(a.n_subjects).tolist()
+df = (_all[_all["subject_id"].isin(_subjects)]
+      .groupby("subject_id", sort=False)
+      .head(max(1, a.n_windows // max(1, len(_subjects)))))
+print(f"sampling {len(df)} windows from {len(_subjects)} subjects "
+      f"(subject-wise, matching real extraction order)", flush=True)
 load = make_pulsedb_signal_loader(a.root, source=a.source)
 
 print(f"loading {a.n_windows} real windows...", flush=True)
