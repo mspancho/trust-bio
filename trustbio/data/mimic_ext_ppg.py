@@ -65,7 +65,16 @@ def make_mimic_ext_ppg_signal_loader(root: str | Path, metadata: pd.DataFrame | 
     def load(visit_id: str, modality: str):
         if visit_id not in cache:
             row = meta.loc[visit_id]
-            rec_path = root / row["folder_path"] / row["signal_file_name"]
+            # `folder_path` is the FULL record path, not a directory: real values
+            # look like "p04/p044018/3000060_0002_0_2", and `signal_file_name`
+            # merely repeats its last component. Joining the two (as this did
+            # originally) builds a doubled path that does not exist. Verified
+            # against the live PhysioNet server by HTTP status:
+            #   p04/p044018/3000060_0002_0_2.hea                  -> 200
+            #   p04/p044018/3000060_0002_0_23000060_0002_0_2.hea  -> 404
+            #   p04/p044018/3000060_0002_0_2/3000060_0002_0_2.hea -> 404
+            # wfdb.rdrecord takes the path WITHOUT the .hea/.dat extension.
+            rec_path = root / str(row["folder_path"])
             rec = wfdb.rdrecord(str(rec_path))
             sig_names = [s.upper() for s in rec.sig_name]
             ecg_idx = sig_names.index("II")

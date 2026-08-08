@@ -29,7 +29,16 @@ def fake_metadata_and_waveforms(tmp_path):
             fmt=["16", "16"],
         )
         rows.append({
-            "segment_id": seg_name, "signal_file_name": seg_name, "folder_path": folder + "/",
+            # Mirror the REAL metadata.csv convention: folder_path is the FULL
+            # record path (directory + record name, no trailing slash, no
+            # extension), and signal_file_name repeats only its last component:
+            #   folder_path      = "p04/p044018/3000060_0002_0_2"
+            #   signal_file_name = "3000060_0002_0_2"
+            # This fixture previously set folder_path=<dir>+"/", which made the
+            # adapter's (incorrect) folder_path/signal_file_name join look right
+            # here while failing on every real record.
+            "segment_id": seg_name, "signal_file_name": seg_name,
+            "folder_path": f"{folder}/{seg_name}",
             "subject_id": i, "event_rhythm": "SR" if i % 2 == 0 else "AF",
             "median_30s_hr": 70.0 + i, "vector_10s_pleth_sqi": "[1, 1, 1]",
             "vector_10s_ecg_sqi": "[1, 1, 1]", "strat_fold": i % 10,

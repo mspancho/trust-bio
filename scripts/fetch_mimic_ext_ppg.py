@@ -163,18 +163,55 @@ def main() -> int:
     records = [r for r in (args.root / "RECORDS").read_text().splitlines() if r.strip()]
     if args.max_patients:
         records = records[: args.max_patients]
-    meta = pd.read_csv(args.root / "metadata.csv")
+
+    # Read ONLY the two columns we need. metadata.csv is 4.92 GB / 6.4M rows;
+    # a full pd.read_csv of it inside a 16 GB job stalls for over an hour
+    # without downloading a single byte (observed: two python procs pegged at
+    # 0.0% CPU, ~18 MB RSS, no output past the startup banner). usecols keeps
+    # the frame to the ~2 string columns actually referenced below.
+    meta = pd.read_csv(
+        args.root / "metadata.csv",
+        usecols=["folder_path", "signal_file_name"],
+        dtype={"folder_path": "string", "signal_file_name": "string"},
+    )
     print(f"[fetch_mimic_ext_ppg] {len(records)} patient folders; "
           f"metadata.csv has {len(meta)} segments", flush=True)
 
+    # Group segments by patient folder ONCE, rather than re-scanning all 6.4M
+    # rows per patient. The old `meta[...str.startswith(patient_dir)]` inside
+    # the loop was O(n_rows x n_patients) -- ~40 BILLION string comparisons for
+    # 6.4M rows x 6,188 patients -- which is why the fetch sat for 75 minutes at
+    # 0% CPU without downloading anything. RECORDS lines look like "p00/p000020/",
+    # so the patient key is the folder_path prefix up to its second "/".
+    wanted = {r.rstrip("/") + "/" for r in records}
+    meta = meta.dropna(subset=["folder_path", "signal_file_name"])
+    patient_key = (
+        meta["folder_path"].astype(str)
+        .str.split("/").str[:2].str.join("/") + "/"
+    )
+    by_patient = {
+        k: v for k, v in meta.groupby(patient_key, sort=False) if k in wanted
+    }
+    print(f"[fetch_mimic_ext_ppg] {sum(len(v) for v in by_patient.values()):,} segments "
+          f"across {len(by_patient):,} of {len(records):,} requested folders", flush=True)
+
     n_ok = n_skip = n_fail = 0
     for i, patient_dir in enumerate(records, 1):
-        sub = meta[meta["folder_path"].astype(str).str.startswith(patient_dir)]
-        for _, row in sub.iterrows():
+        sub = by_patient.get(patient_dir.rstrip("/") + "/")
+        if sub is None:
+            continue
+        for folder_path, signal_file_name in zip(
+            sub["folder_path"].astype(str), sub["signal_file_name"].astype(str)
+        ):
             for ext in (".hea", ".dat"):
-                # folder_path already ends in "/" (see trustbio/data/mimic_ext_ppg.py);
-                # the file itself is signal_file_name + ext inside that folder.
-                rel = f"{row['folder_path']}{row['signal_file_name']}{ext}"
+                # VERIFIED against the live server: folder_path is the FULL
+                # record path already (e.g. "p04/p044018/3000060_0002_0_2") and
+                # signal_file_name repeats its last component, so the file is
+                # simply folder_path + ext. Confirmed by HTTP status:
+                #   p04/p044018/3000060_0002_0_2.hea                     -> 200
+                #   p04/p044018/3000060_0002_0_23000060_0002_0_2.hea     -> 404
+                #   p04/p044018/3000060_0002_0_2/3000060_0002_0_2.hea    -> 404
+                rel = f"{folder_path}{ext}"
                 dest = args.root / rel
                 if dest.exists():
                     n_skip += 1
