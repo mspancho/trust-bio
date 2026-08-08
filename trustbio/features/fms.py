@@ -73,16 +73,52 @@ def _torch_load_weights_only_false():
         torch.load = original
 
 
+#: Generic top-level package names that MORE THAN ONE vendored repo defines.
+#: Whichever repo loads first wins and poisons the others, because a cached
+#: sys.modules entry beats any later sys.path change.
+_SHADOWED_TOP_LEVEL = ("models", "utils", "modules", "src", "data", "config")
+
+
 def _add_repo_to_path(name: str) -> Path:
-    """Prepend a vendored model repo to sys.path; raise if absent."""
+    """Prepend a vendored model repo to sys.path; raise if absent.
+
+    Also evicts generically-named top-level modules that a PREVIOUSLY loaded
+    repo may have already imported. Several vendored repos ship a package
+    literally called `models`, so in a process that loads more than one of them
+    the first import wins and every later repo silently gets the wrong package:
+
+        _add_repo_to_path("D-BETA")            # imports D-BETA's `models`
+        _add_repo_to_path("papagei-...")       # sys.path updated, but...
+        from models.resnet import ResNet1DMoE  # -> ModuleNotFoundError
+
+    sys.path cannot fix that: `models` is already in sys.modules, so Python
+    never re-searches. This is exactly how papagei failed in a full run while
+    passing in isolation -- and because _FMBase turns a failed load into a
+    SILENT random-projection fallback, it would have shown up as plausible
+    numbers rather than an error.
+    """
     repo = MODEL_REPOS_DIR / name
     if not repo.exists():
         raise RuntimeError(
             f"model repo {name!r} not found under {MODEL_REPOS_DIR}. Clone it "
             f"there (or set SIGNALMCMED_MODEL_REPOS) — see README 'Vendoring'."
         )
-    if str(repo) not in sys.path:
-        sys.path.insert(0, str(repo))
+    if str(repo) in sys.path:
+        sys.path.remove(str(repo))
+    sys.path.insert(0, str(repo))
+
+    # Drop any cached module that resolved out of a DIFFERENT vendored repo, so
+    # the import machinery re-resolves it against the repo we just prepended.
+    for mod_name in list(sys.modules):
+        top = mod_name.split(".", 1)[0]
+        if top not in _SHADOWED_TOP_LEVEL:
+            continue
+        origin = getattr(sys.modules[mod_name], "__file__", None) or ""
+        paths = list(getattr(sys.modules[mod_name], "__path__", []) or [])
+        locations = [origin, *paths]
+        if any(str(MODEL_REPOS_DIR) in loc and str(repo) not in loc
+               for loc in locations if loc):
+            del sys.modules[mod_name]
     return repo
 
 
@@ -331,9 +367,25 @@ class XECGExtractor(_FMBase):
             from xecg.xECG import xECG
         except Exception as e:
             return self._use_fallback(f"xecg repo not importable ({e})")
-        # from_pretrained pulls weights from HF; a local checkpoint dir also works.
+        # from_pretrained accepts an HF repo id or a local DIRECTORY -- never a
+        # single weights file. config.resolve_checkpoint() hands us the file
+        # (model_weights/xECG_base_model_v1.safetensors), which made
+        # from_pretrained treat the absolute path as a repo id and raise
+        # HFValidationError. Point it at the containing directory when the
+        # resolved checkpoint is a file; otherwise fall back to the HF repo.
         src = self.checkpoint or self.HF_REPO
-        self._model = xECG.from_pretrained(src)
+        ckpt = Path(src) if src else None
+        if ckpt is not None and ckpt.is_file():
+            src = str(ckpt.parent)
+        try:
+            self._model = xECG.from_pretrained(src)
+        except Exception as e:
+            if src != self.HF_REPO:
+                # A local dir without the config.json from_pretrained expects
+                # still fails; the gated-free HF repo is the reliable source.
+                self._model = xECG.from_pretrained(self.HF_REPO)
+            else:
+                raise
         self._model.to(self.device).eval()
         return self
 
