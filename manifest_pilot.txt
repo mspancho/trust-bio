@@ -1,0 +1,14 @@
+moment-base pulsedb_mimic 10
+chronos-bolt-small pulsedb_mimic 10
+dbeta pulsedb_mimic 10
+ecgfounder pulsedb_mimic 10
+xecg-10min pulsedb_mimic 10
+papagei pulsedb_mimic 10
+ecg-domain pulsedb_mimic 10
+moment-base pulsedb_vital 10
+chronos-bolt-small pulsedb_vital 10
+dbeta pulsedb_vital 10
+ecgfounder pulsedb_vital 10
+xecg-10min pulsedb_vital 10
+papagei pulsedb_vital 10
+ecg-domain pulsedb_vital 10

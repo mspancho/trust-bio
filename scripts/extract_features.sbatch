@@ -35,8 +35,21 @@ echo "[extract] task ${i}: model=${MODEL} dataset=${DATASET} duration=${DURATION
 OVERWRITE_ARG=()
 [[ "${TRUSTBIO_OVERWRITE:-0}" == "1" ]] && OVERWRITE_ARG=(--overwrite)
 
+# ecg-domain is neurokit2 feature extraction -- pure CPU, no GPU kernels. It is
+# also 56% of total per-window cost (68.2 of 122.8 ms, measured on an A40), so
+# pinning it to "cuda" would occupy a scarce GPU to run a CPU workload.
+DEVICE="cuda"
+[[ "${MODEL}" == *domain* ]] && DEVICE="cpu"
+
+# Pass the cohort/label cache: without it every array task re-derives the label
+# table, which costs ~16 min per (dataset) handle because hr_regression is
+# computed from the ECG. Across an array that is hours of duplicated work.
+CACHE_ARG=()
+[[ -n "${TRUSTBIO_COHORT_CACHE:-}" ]] && CACHE_ARG=(--cohort-cache "${TRUSTBIO_COHORT_CACHE}")
+
 conda run -n "${ENV_NAME}" python scripts/extract_features.py \
   --model "${MODEL}" --dataset "${DATASET}" --duration-sec "${DURATION}" \
-  --device cuda --store "${STORE}" "${OVERWRITE_ARG[@]}"
+  --device "${DEVICE}" --store "${STORE}" \
+  "${CACHE_ARG[@]}" "${OVERWRITE_ARG[@]}"
 
 echo "[extract] done: ${MODEL} / ${DATASET} @ ${DURATION}s"
