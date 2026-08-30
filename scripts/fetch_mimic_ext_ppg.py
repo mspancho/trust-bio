@@ -151,6 +151,12 @@ def main() -> int:
                     help="split patient folders across N concurrent tasks. Each "
                          "shard fetches a disjoint slice, so tasks never race "
                          "for the same file.")
+    ap.add_argument("--record-list", type=Path, default=None,
+                    help="precomputed newline-separated record paths (see "
+                         "scripts/build_mimicext_filelist.py). Strongly "
+                         "preferred over re-parsing the 4.92 GB metadata.csv: "
+                         "each shard doing that held ~4.25 GB RSS and burned "
+                         "~10 min of CPU before downloading anything.")
     ap.add_argument("--throttle-ms", type=int, default=0,
                     help="sleep this long between file requests. Be a polite "
                          "client: physionet.org is shared infrastructure and "
@@ -181,6 +187,50 @@ def main() -> int:
         return 0
 
     import pandas as pd
+
+    # Fast path: a precomputed record list. Each line is a full record path
+    # (no extension), so no metadata parsing is needed at all.
+    if args.record_list is not None:
+        with open(args.record_list) as fh:
+            rels = [ln.strip() for ln in fh if ln.strip()]
+        if args.max_patients:
+            # bound by PATIENT folder, not by record, so --max-patients keeps
+            # its meaning: take whole folders until the limit is reached.
+            seen, keep = set(), []
+            for r in rels:
+                folder = "/".join(r.split("/")[:2])
+                if folder not in seen:
+                    if len(seen) >= args.max_patients:
+                        break
+                    seen.add(folder)
+                keep.append(r)
+            rels = keep
+        if args.n_shards > 1:
+            rels = rels[args.shard :: args.n_shards]
+        print(f"[fetch_mimic_ext_ppg] shard {args.shard}/{args.n_shards}: "
+              f"{len(rels):,} records from {args.record_list.name}", flush=True)
+
+        n_ok = n_skip = n_fail = 0
+        for i, rel_base in enumerate(rels, 1):
+            for ext in (".hea", ".dat"):
+                rel = rel_base + ext
+                dest = args.root / rel
+                if dest.exists() and dest.stat().st_size > 0:
+                    n_skip += 1
+                    continue
+                if download(opener, BASE_URL + rel, dest):
+                    n_ok += 1
+                else:
+                    n_fail += 1
+                if args.throttle_ms:
+                    time.sleep(args.throttle_ms / 1000.0)
+            if i % 200 == 0 or i == len(rels):
+                print(f"[fetch_mimic_ext_ppg] {i:,}/{len(rels):,} records "
+                      f"(downloaded {n_ok:,}, skipped {n_skip:,}, failed {n_fail:,})",
+                      flush=True)
+        print(f"[fetch_mimic_ext_ppg] done: {n_ok:,} downloaded, {n_skip:,} present, "
+              f"{n_fail:,} failed")
+        return 1 if n_fail else 0
 
     records = [r for r in (args.root / "RECORDS").read_text().splitlines() if r.strip()]
     if args.max_patients:

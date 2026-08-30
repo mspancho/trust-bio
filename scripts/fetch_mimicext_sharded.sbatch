@@ -43,6 +43,7 @@ trap 'echo "[shard ${SHARD}] wall limit approaching"; resubmit; exit 0' USR1
 
 echo "[shard ${SHARD}/${N_SHARDS}] throttle=${THROTTLE_MS}ms"
 conda run -n trust-bio python scripts/fetch_mimic_ext_ppg.py \
+  --record-list "${REPO}/features_cache/mimicext_records.txt" \
   --shard "${SHARD}" --n-shards "${N_SHARDS}" --throttle-ms "${THROTTLE_MS}" &
 wait $!
 rc=$?
