@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import http.cookiejar
+import time
 import os
 import re
 import sys
@@ -144,6 +145,17 @@ def main() -> int:
                          "(omit to fetch all)")
     ap.add_argument("--metadata-only", action="store_true",
                     help="fetch only README/RECORDS/metadata.csv/SHA256SUMS")
+    ap.add_argument("--shard", type=int, default=0,
+                    help="this task's index within --n-shards (0-based)")
+    ap.add_argument("--n-shards", type=int, default=1,
+                    help="split patient folders across N concurrent tasks. Each "
+                         "shard fetches a disjoint slice, so tasks never race "
+                         "for the same file.")
+    ap.add_argument("--throttle-ms", type=int, default=0,
+                    help="sleep this long between file requests. Be a polite "
+                         "client: physionet.org is shared infrastructure and "
+                         "these are ~6.4M small files, so the load is request "
+                         "rate, not bandwidth.")
     args = ap.parse_args()
 
     try:
@@ -173,6 +185,12 @@ def main() -> int:
     records = [r for r in (args.root / "RECORDS").read_text().splitlines() if r.strip()]
     if args.max_patients:
         records = records[: args.max_patients]
+    if args.n_shards > 1:
+        # Deterministic stride so shards are disjoint and every folder is
+        # covered exactly once, with no coordination between tasks.
+        records = records[args.shard :: args.n_shards]
+        print(f"[fetch_mimic_ext_ppg] shard {args.shard}/{args.n_shards}: "
+              f"{len(records):,} patient folders", flush=True)
 
     # Read ONLY the two columns we need. metadata.csv is 4.92 GB / 6.4M rows;
     # a full pd.read_csv of it inside a 16 GB job stalls for over an hour
@@ -230,6 +248,8 @@ def main() -> int:
                     n_ok += 1
                 else:
                     n_fail += 1
+                if args.throttle_ms:
+                    time.sleep(args.throttle_ms / 1000.0)
         if i % 10 == 0 or i == len(records):
             print(f"[fetch_mimic_ext_ppg] {i}/{len(records)} folders "
                   f"(downloaded {n_ok}, skipped {n_skip}, failed {n_fail})", flush=True)

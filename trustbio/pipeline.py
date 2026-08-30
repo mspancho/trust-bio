@@ -77,6 +77,8 @@ def extract_features_for_model(
 
         per_modality = {m: [] for m in MODALITIES}
         kept_ids = []
+        n_requested = len(df)
+        first_error = None
         for visit_id in df["visit_id"].astype(str):
             try:
                 ecg_raw, ecg_fs = dataset.load_signal(visit_id, "ecg")
@@ -84,11 +86,28 @@ def extract_features_for_model(
                 vecs = build_visit_features(
                     extractor, ecg_raw, ecg_fs, ppg_raw, ppg_fs, duration_sec
                 )
-            except Exception:
+            except Exception as exc:  # noqa: BLE001 -- one bad window must not kill the run
+                if first_error is None:
+                    first_error = f"{type(exc).__name__}: {exc}"
                 continue
             kept_ids.append(visit_id)
             for m in MODALITIES:
                 per_modality[m].append(vecs[m])
+
+        # Always report kept/requested. This except-continue silently dropped
+        # windows, so a systematic failure -- a bad path, a model rejecting every
+        # input -- would finish "successfully" with a quietly truncated feature
+        # matrix and nothing in the log to show for it. At scale nobody re-counts
+        # rows by hand, so the run has to say so itself.
+        n_skipped = n_requested - len(kept_ids)
+        msg = (f"[extract] {model_name}/{dataset.name}/{split}: "
+               f"kept {len(kept_ids):,}/{n_requested:,} windows")
+        if n_skipped:
+            frac = n_skipped / max(n_requested, 1)
+            msg += f", SKIPPED {n_skipped:,} ({frac:.1%}); first error: {first_error}"
+            if frac > 0.01:
+                msg = "WARNING: " + msg
+        print(msg, flush=True)
 
         dim = extractor.feature_dim
         for m in MODALITIES:
