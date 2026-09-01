@@ -1,4 +1,13 @@
 import numpy as np
+
+# neurokit2 >= 0.2.8 calls np.trapezoid, which only exists in numpy >= 2.0
+# (numpy 1.26 names it np.trapz). This env pins numpy 1.26.4 for D-BETA, so
+# without the alias EVERY nk.ecg_quality call raises AttributeError -- which
+# cascaded (via two silent excepts) into all-zero ecg-domain features for
+# every window of the pilot. Same function, renamed upstream; alias is exact.
+if not hasattr(np, "trapezoid"):
+    np.trapezoid = np.trapz
+
 import neurokit2 as nk
 
 def extract_ecg_feature(ecg_signal, fs):
@@ -38,7 +47,9 @@ def extract_ecg_feature(ecg_signal, fs):
         sqi_value = {'Excellent': [1], 'Unacceptable': [0], 'Barely acceptable': [0.5]}
         sqi = sqi_value[sqi]
     except:
-        sqi = 0
+        # Must stay 1-D: a bare scalar 0 made the np.concatenate below raise
+        # ValueError (0-dim vs 1-dim) on every otherwise-good window.
+        sqi = [0]
 
     # Combine all features into a single vector
     features = np.concatenate([

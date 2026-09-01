@@ -19,7 +19,25 @@ from .base import FeatureExtractor
 from ..vendored_utils import extract_ecg_feature, extract_ppg_features
 
 
-class ECGDomainFeatures(FeatureExtractor):
+class _FallbackReporting:
+    """Zero-fill is the right per-segment fallback (one unreadable segment must
+    not kill an extraction run), but it must never be SILENT: an environment
+    bug once made every segment fall back, and the run finished green with
+    all-zero features. Print the first exception and then a count every 10k."""
+
+    _n_fallback = 0
+
+    def _note_fallback(self, exc: Exception) -> None:
+        self._n_fallback += 1
+        if self._n_fallback == 1:
+            print(f"WARNING: {type(self).__name__}: first segment fell back to "
+                  f"zeros ({type(exc).__name__}: {exc})", flush=True)
+        elif self._n_fallback % 10_000 == 0:
+            print(f"WARNING: {type(self).__name__}: {self._n_fallback:,} "
+                  f"segments have fallen back to zeros", flush=True)
+
+
+class ECGDomainFeatures(_FallbackReporting, FeatureExtractor):
     """Vendored NeuroKit2 ECG features, 10-s segments @250 Hz."""
 
     segment_sec = 10
@@ -32,13 +50,14 @@ class ECGDomainFeatures(FeatureExtractor):
         for seg in segments:
             try:
                 f = extract_ecg_feature(seg.astype(np.float64), fs=self.sampling_freq)
-            except Exception:
+            except Exception as exc:
                 f = np.zeros(ECG_DOMAIN_DIM, dtype=np.float32)
+                self._note_fallback(exc)
             feats.append(_fit_dim(f, ECG_DOMAIN_DIM))
         return np.stack(feats).astype(np.float32)
 
 
-class PPGDomainFeatures(FeatureExtractor):
+class PPGDomainFeatures(_FallbackReporting, FeatureExtractor):
     """Vendored pyPPG features, >=20-s segments (60 s default) @250 Hz."""
 
     def __init__(self, spec: FMSpec, device: str = "cpu",
@@ -58,8 +77,9 @@ class PPGDomainFeatures(FeatureExtractor):
         for seg in segments:
             try:
                 f = extract_ppg_features(seg.astype(np.float64), fs=self.sampling_freq)
-            except Exception:
+            except Exception as exc:
                 f = np.zeros(PPG_DOMAIN_DIM, dtype=np.float32)
+                self._note_fallback(exc)
             feats.append(_fit_dim(f, PPG_DOMAIN_DIM))
         return np.stack(feats).astype(np.float32)
 
