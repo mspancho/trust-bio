@@ -4,6 +4,7 @@ dataset) pair, optionally under a specified degradation condition."""
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 from trustbio.config import is_model_available
 from trustbio.pipeline import extract_features_for_model
@@ -42,8 +43,13 @@ def main():
     )
     print(f"{args.dataset} cohort: {dataset.cohort.counts}")
 
+    # --store is the BASE cache root; each dataset gets its own subdirectory.
+    # FeatureStore paths carry no dataset component, so two datasets written to
+    # the same root silently share <model>/<modality>/<duration>s/<split>.npz --
+    # concurrent array tasks then interleave or tear each other's files (this
+    # happened: the 100-subject pilot produced split-mixed and BadZipFile npz).
     extract_features_for_model(
-        args.model, dataset, FeatureStore(args.store),
+        args.model, dataset, FeatureStore(Path(args.store) / args.dataset),
         duration_sec=args.duration_sec, device=args.device,
         allow_fallback=args.allow_fallback, checkpoint=args.checkpoint,
         overwrite=args.overwrite,

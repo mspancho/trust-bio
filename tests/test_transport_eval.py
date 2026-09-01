@@ -5,8 +5,12 @@ from trustbio.store import FeatureStore
 from trustbio.eval.transport import run_cross_institution_eval, both_directions
 
 
-def _fake_store_and_labels(tmp_path, seed_a=0, seed_b=1, n=40, dim=8):
-    store = FeatureStore(tmp_path / "features_cache")
+def _fake_stores_and_labels(tmp_path, seed_a=0, seed_b=1, n=40, dim=8):
+    # One store PER institution, mirroring extract_features.py's
+    # <store>/<dataset>/ scoping (a shared root let concurrent extraction
+    # jobs overwrite each other's files).
+    mimic_store = FeatureStore(tmp_path / "features_cache" / "pulsedb_mimic")
+    vital_store = FeatureStore(tmp_path / "features_cache" / "pulsedb_vital")
     rng_a, rng_b = np.random.default_rng(seed_a), np.random.default_rng(seed_b)
 
     def make_split(rng, n_split, prefix):
@@ -21,20 +25,20 @@ def _fake_store_and_labels(tmp_path, seed_a=0, seed_b=1, n=40, dim=8):
     mimic_labels, vital_labels = {}, {}
     for split, n_split in [("train", 24), ("val", 8), ("test", 8)]:
         ids, X, y = make_split(rng_a, n_split, "mimic_")
-        store.save("moment-base", "ecg", 10, split, ids, X)
+        mimic_store.save("moment-base", "ecg", 10, split, ids, X)
         mimic_labels[split] = y
 
         ids_b, X_b, y_b = make_split(rng_b, n_split, "vital_")
-        store.save("moment-base", "ecg", 10, f"vital_{split}", ids_b, X_b)
+        vital_store.save("moment-base", "ecg", 10, split, ids_b, X_b)
         vital_labels[split] = y_b
 
-    return store, mimic_labels, vital_labels
+    return mimic_store, vital_store, mimic_labels, vital_labels
 
 
 def test_run_cross_institution_eval_produces_bp_and_hr_records(tmp_path):
-    store, mimic_labels, vital_labels = _fake_store_and_labels(tmp_path)
+    mimic_store, vital_store, mimic_labels, vital_labels = _fake_stores_and_labels(tmp_path)
     records = run_cross_institution_eval(
-        "moment-base", "ecg", store,
+        "moment-base", "ecg", mimic_store, vital_store,
         source_labels=mimic_labels, target_labels=vital_labels,
         duration_sec=10, seed=0,
     )
@@ -45,9 +49,10 @@ def test_run_cross_institution_eval_produces_bp_and_hr_records(tmp_path):
 
 
 def test_both_directions_tags_direction_correctly(tmp_path):
-    store, mimic_labels, vital_labels = _fake_store_and_labels(tmp_path)
+    mimic_store, vital_store, mimic_labels, vital_labels = _fake_stores_and_labels(tmp_path)
     records = both_directions(
-        "moment-base", "ecg", store, mimic_labels, vital_labels, duration_sec=10, seed=0,
+        "moment-base", "ecg", mimic_store, vital_store,
+        mimic_labels, vital_labels, duration_sec=10, seed=0,
     )
     directions = {r["direction"] for r in records}
     assert directions == {"mimic_to_vital", "vital_to_mimic"}

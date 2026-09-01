@@ -34,13 +34,18 @@ def main():
         for s in ("train", "val", "test")
     }
 
-    store = FeatureStore(args.store)
+    # --store is the BASE cache root; each institution's features live in
+    # their own subdirectory (written by extract_features.py's per-dataset
+    # scoping), so the two can never collide.
+    mimic_store = FeatureStore(Path(args.store) / "pulsedb_mimic")
+    vital_store = FeatureStore(Path(args.store) / "pulsedb_vital")
     all_records = []
     for model_name in available_models():
         for modality in ("ecg", "ppg", "ecg_ppg_mean"):
             try:
                 records = both_directions(
-                    model_name, modality, store, mimic_labels, vital_labels,
+                    model_name, modality, mimic_store, vital_store,
+                    mimic_labels, vital_labels,
                     duration_sec=args.duration_sec,
                 )
             except FileNotFoundError:

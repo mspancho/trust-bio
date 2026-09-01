@@ -35,7 +35,9 @@ def main():
     dataset = build_dataset_handle(args.dataset, args)
     print(f"{args.dataset} cohort: {dataset.cohort.counts}")
 
-    store = FeatureStore(args.store)
+    # --store is the BASE cache root; features live under <store>/<dataset>/
+    # (the same scoping extract_features.py writes with).
+    store = FeatureStore(Path(args.store) / args.dataset)
     results_by_model = {}
     for model_name in available_models():
         out = run_evaluation(
