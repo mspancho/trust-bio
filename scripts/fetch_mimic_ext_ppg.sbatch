@@ -4,6 +4,7 @@
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=16G
 #SBATCH --time=11:30:00
+#SBATCH --signal=B:USR1@300
 #SBATCH --output=logs/mimicext_%j.out
 #SBATCH --error=logs/mimicext_%j.err
 #
@@ -38,13 +39,26 @@ esac
 ARGS="${FETCH_ARGS-${DEFAULT_ARGS}}"
 echo "[sbatch] FETCH_MODE=${FETCH_MODE-metadata}  ARGS='${ARGS}'"
 
-conda run -n trust-bio python scripts/fetch_mimic_ext_ppg.py ${ARGS}
+resubmit() {
+  echo "[sbatch] resubmitting to resume (fetch is incremental)"
+  FETCH_MODE="${FETCH_MODE-metadata}" FETCH_ARGS="${ARGS}" \
+    sbatch --begin=now+2minutes "${REPO}/scripts/fetch_mimic_ext_ppg.sbatch"
+}
+
+# On TIMEOUT slurm SIGKILLs the job outright, so the exit-code branch below
+# NEVER RUNS -- an earlier 11h30m run hit its limit and silently failed to
+# resubmit, stalling the fetch entirely. --signal=B:USR1@300 asks slurm to send
+# USR1 to the batch shell 5 minutes before the wall limit; trap it, resubmit,
+# and exit while we still can.
+trap 'echo "[sbatch] wall limit approaching"; resubmit; exit 0' USR1
+
+conda run -n trust-bio python scripts/fetch_mimic_ext_ppg.py ${ARGS} &
+wait $!
 rc=$?
 
 if [[ $rc -ne 0 ]]; then
-  echo "[sbatch] fetch exited ${rc}; resubmitting in 2 min to resume"
-  FETCH_MODE="${FETCH_MODE-metadata}" FETCH_ARGS="${ARGS}" \
-    sbatch --begin=now+2minutes "${REPO}/scripts/fetch_mimic_ext_ppg.sbatch"
+  echo "[sbatch] fetch exited ${rc}"
+  resubmit
 else
   echo "[sbatch] fetch completed cleanly; no resubmission"
 fi
