@@ -21,16 +21,28 @@ def main():
     ap.add_argument("--store", required=True)
     ap.add_argument("--duration-sec", type=int, default=600)
     ap.add_argument("--out", required=True)
+    ap.add_argument(
+        "--cohort-cache", type=Path, default=None,
+        help="directory holding cached cohort AND label CSVs (e.g. the pilot's "
+             "features_cache/pilot100). Without it the cohort build re-scans "
+             "every PulseDB subject file (~hours) and labels are derived for "
+             "the FULL cohort rather than the one the features were extracted "
+             "from.",
+    )
     args = ap.parse_args()
 
-    mimic_cohort = build_pulsedb_cohort(args.pulsedb_root, source="mimic")
-    vital_cohort = build_pulsedb_cohort(args.pulsedb_root, source="vital")
+    mimic_cohort = build_pulsedb_cohort(args.pulsedb_root, source="mimic", cache=args.cohort_cache)
+    vital_cohort = build_pulsedb_cohort(args.pulsedb_root, source="vital", cache=args.cohort_cache)
     mimic_labels = {
-        s: build_pulsedb_label_table(args.pulsedb_root, "mimic", mimic_cohort.split(s)["visit_id"].tolist())
+        s: build_pulsedb_label_table(
+            args.pulsedb_root, "mimic", mimic_cohort.split(s)["visit_id"].tolist(),
+            cache=args.cohort_cache)
         for s in ("train", "val", "test")
     }
     vital_labels = {
-        s: build_pulsedb_label_table(args.pulsedb_root, "vital", vital_cohort.split(s)["visit_id"].tolist())
+        s: build_pulsedb_label_table(
+            args.pulsedb_root, "vital", vital_cohort.split(s)["visit_id"].tolist(),
+            cache=args.cohort_cache)
         for s in ("train", "val", "test")
     }
 
