@@ -78,3 +78,13 @@ python -m pytest tests/ -v
 ## License
 
 MIT (see `LICENSE`). Vendored external model repos (ECGFounder, xecg, papagei-foundation-model, D-BETA) retain their own upstream licenses.
+
+## Full-scale extraction (launched 2026-09-21)
+
+Chunked, resumable SLURM arrays; see `docs/superpowers/plans/2026-09-21-full-scale-chunked-extraction.md`.
+
+- Store: `features_cache/full/<dataset>/<model>/<modality>/10s/<split>.npz` (chunks: `<split>.chunkXXofNN.npz` until merged)
+- Manifests: `manifest_full_gpu.txt` (66 GPU chunk tasks), `manifest_full_cpu.txt` (28 ecg-domain CPU tasks), `manifest_full_cells.txt` (14 cells for the merge)
+- Jobs: gpu=54042608 cpu=54042609 merge=54042610 (merge waits on both arrays; it REFUSES any cell with missing chunks -- redo those chunks with `sbatch --array=<idx> scripts/extract_features[_cpu].sbatch <manifest>` then rerun that merge task)
+- Labels: `scripts/build_pulsedb_labels.py --store features_cache` (jobs tb-labels-mimic 54042005 / tb-labels-vital 54042006)
+- Watch: `squeue -u $USER | grep trustbio`; `grep -h kept logs/extract_<id>_*.out`
