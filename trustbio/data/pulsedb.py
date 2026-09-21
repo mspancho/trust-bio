@@ -35,6 +35,7 @@ fixture without needing mat73/the real download; the real path is
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -78,6 +79,36 @@ def _list_subject_files(paths: PulseDBPaths, source: str, file_ext: str) -> list
 
 def _subject_id_from_path(path: Path) -> str:
     return path.stem
+
+
+class _BoundedSubjectCache:
+    """Most-recently-used cache of decoded subject files, bounded in size.
+
+    Cohorts are ordered subject-by-subject, so consecutive windows hit the same
+    file and a handful of entries gives an essentially perfect hit rate. The
+    bound is the point: an unbounded dict keeps every subject ever touched --
+    about 31 MB each for PulseDB_MIMIC (ECG+PPG as float64), ~76 GB across the
+    full 2,423-subject cohort. That fits a 100-subject pilot and OOMs any
+    full-scale job partway through its train split.
+    """
+
+    def __init__(self, load_subject, maxsize: int = 4):
+        self._load_subject = load_subject
+        self._maxsize = max(1, int(maxsize))
+        self._items: OrderedDict[str, dict] = OrderedDict()
+
+    def get(self, subject_id: str) -> dict:
+        if subject_id in self._items:
+            self._items.move_to_end(subject_id)
+            return self._items[subject_id]
+        value = self._load_subject(subject_id)
+        self._items[subject_id] = value
+        while len(self._items) > self._maxsize:
+            self._items.popitem(last=False)
+        return value
+
+    def __len__(self) -> int:
+        return len(self._items)
 
 
 def _load_subject_windows(path: Path, file_ext: str) -> dict:
@@ -308,16 +339,18 @@ def make_pulsedb_signal_loader(root: str | Path, source: str, file_ext: str = "m
     directly).
     """
     paths = PulseDBPaths(Path(root))
-    cache: dict[str, dict] = {}
+
+    def _load_subject(subject_id: str) -> dict:
+        path = paths.source_dir(source) / f"{subject_id}.{file_ext}"
+        if not path.exists():
+            raise FileNotFoundError(f"no PulseDB file for subject {subject_id} at {path}")
+        return _load_subject_windows(path, file_ext)
+
+    subjects = _BoundedSubjectCache(_load_subject)
 
     def load(visit_id: str, modality: str):
         subject_id, win_idx = _parse_visit_id(visit_id)
-        if subject_id not in cache:
-            path = paths.source_dir(source) / f"{subject_id}.{file_ext}"
-            if not path.exists():
-                raise FileNotFoundError(f"no PulseDB file for subject {subject_id} at {path}")
-            cache[subject_id] = _load_subject_windows(path, file_ext)
-        return cache[subject_id][modality][win_idx], PULSEDB_FS
+        return subjects.get(subject_id)[modality][win_idx], PULSEDB_FS
 
     return load
 
@@ -353,14 +386,13 @@ def build_pulsedb_label_table(
               f"{(~wanted.isin(cached.index)).sum():,} requested visits; rebuilding")
 
     paths = PulseDBPaths(Path(root))
-    cache: dict[str, dict] = {}
+    subjects = _BoundedSubjectCache(
+        lambda sid: _load_subject_windows(paths.source_dir(source) / f"{sid}.{file_ext}", file_ext)
+    )
     rows = []
     for vid in visit_ids:
         subject_id, win_idx = _parse_visit_id(vid)
-        if subject_id not in cache:
-            path = paths.source_dir(source) / f"{subject_id}.{file_ext}"
-            cache[subject_id] = _load_subject_windows(path, file_ext)
-        windows = cache[subject_id]
+        windows = subjects.get(subject_id)
         hr = _estimate_hr_from_ecg(windows["ecg"][win_idx], PULSEDB_FS)
         rows.append({
             "visit_id": vid,
