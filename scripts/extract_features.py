@@ -4,6 +4,7 @@ dataset) pair, optionally under a specified degradation condition."""
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from trustbio.config import is_model_available
@@ -16,7 +17,7 @@ else:
     from _dataset_builders import DATASET_CHOICES, add_dataset_root_args, build_dataset_handle
 
 
-def main():
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset", required=True, choices=DATASET_CHOICES)
     add_dataset_root_args(ap)
@@ -37,11 +38,11 @@ def main():
                      choices=[None, "motion_artifact", "lead_off", "missing_ppg"])
     ap.add_argument("--degrade-severity", type=float, default=None)
     ap.add_argument("--seed", type=int, default=0)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     if not args.allow_fallback and not is_model_available(args.model, args.checkpoint):
         print(f"[skip] {args.model}: no weights available. Skipping cleanly.")
-        return
+        return 0
 
     # Extraction only needs splits and signals. Labels (hr_regression derived
     # from every window's ECG) are built once by scripts/build_pulsedb_labels.py
@@ -59,13 +60,22 @@ def main():
     # the same root silently share <model>/<modality>/<duration>s/<split>.npz --
     # concurrent array tasks then interleave or tear each other's files (this
     # happened: the 100-subject pilot produced split-mixed and BadZipFile npz).
-    extract_features_for_model(
+    ran = extract_features_for_model(
         args.model, dataset, FeatureStore(Path(args.store) / args.dataset),
         duration_sec=args.duration_sec, device=args.device,
         allow_fallback=args.allow_fallback, checkpoint=args.checkpoint,
         overwrite=args.overwrite, chunk=args.chunk, n_chunks=args.n_chunks,
     )
+    if not ran:
+        # The registry said this model IS available, yet its weights failed to
+        # load (e.g. a CUDA-saved checkpoint on a GPU-less node). Exiting 0
+        # here made such an array task report "done" with nothing extracted;
+        # the merge would refuse the cell hours later. Fail where sacct sees it.
+        print(f"[extract] ERROR: {args.model} is registered as available but "
+              f"could not be loaded; nothing extracted", flush=True)
+        return 3
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
