@@ -41,6 +41,20 @@ class ModelUnavailable(RuntimeError):
     than crash — important for restricted-access models such as CSFM."""
 
 
+def chunk_bounds(n: int, chunk: int, n_chunks: int) -> tuple[int, int]:
+    """[start, stop) of contiguous chunk `chunk` when `n` items are cut into
+    `n_chunks` near-equal pieces (the first n % n_chunks pieces get one extra,
+    exactly like numpy.array_split). Contiguity matters: cohorts are ordered
+    by subject, so a contiguous chunk touches a subset of the subject files
+    and the loader's small cache keeps its hit rate."""
+    if n_chunks < 1 or not (0 <= chunk < n_chunks):
+        raise ValueError(f"bad chunk {chunk} for n_chunks={n_chunks}")
+    base, extra = divmod(n, n_chunks)
+    start = chunk * base + min(chunk, extra)
+    stop = start + base + (1 if chunk < extra else 0)
+    return start, stop
+
+
 def extract_features_for_model(
     model_name: str,
     dataset: DatasetHandle,
@@ -52,10 +66,19 @@ def extract_features_for_model(
     overwrite: bool = False,
     skip_if_unavailable: bool = True,
     force_fallback: bool = False,
+    chunk: int | None = None,
+    n_chunks: int | None = None,
 ) -> bool:
     """Stage 3: compute and cache visit-level ECG/PPG/fusion vectors for one
     (model, dataset) pair. See signal-mcmed-msp/signalmcmed/pipeline.py for the
-    original single-dataset version this generalizes."""
+    original single-dataset version this generalizes.
+
+    With `chunk`/`n_chunks`, only contiguous chunk `chunk` of every split is
+    processed and saved under the chunk split name (see
+    FeatureStore.chunk_split); FeatureStore.merge_chunks assembles the final
+    per-split files once all chunks exist."""
+    if (chunk is None) != (n_chunks is None):
+        raise ValueError("chunk and n_chunks must be given together")
     try:
         extractor = get_extractor(
             model_name, device=device, allow_fallback=allow_fallback,
@@ -69,9 +92,20 @@ def extract_features_for_model(
         raise ModelUnavailable(msg) from e
 
     for split, df in dataset.splits.items():
+        store_split = split
+        if chunk is not None:
+            # A finished merge supersedes every chunk of this split.
+            if (
+                not overwrite
+                and all(store.exists(model_name, m, duration_sec, split) for m in MODALITIES)
+            ):
+                continue
+            start, stop = chunk_bounds(len(df), chunk, n_chunks)
+            df = df.iloc[start:stop]
+            store_split = FeatureStore.chunk_split(split, chunk, n_chunks)
         if (
             not overwrite
-            and all(store.exists(model_name, m, duration_sec, split) for m in MODALITIES)
+            and all(store.exists(model_name, m, duration_sec, store_split) for m in MODALITIES)
         ):
             continue
 
@@ -100,7 +134,7 @@ def extract_features_for_model(
         # matrix and nothing in the log to show for it. At scale nobody re-counts
         # rows by hand, so the run has to say so itself.
         n_skipped = n_requested - len(kept_ids)
-        msg = (f"[extract] {model_name}/{dataset.name}/{split}: "
+        msg = (f"[extract] {model_name}/{dataset.name}/{store_split}: "
                f"kept {len(kept_ids):,}/{n_requested:,} windows")
         if n_skipped:
             frac = n_skipped / max(n_requested, 1)
@@ -112,7 +146,7 @@ def extract_features_for_model(
         dim = extractor.feature_dim
         for m in MODALITIES:
             store.save(
-                model_name, m, duration_sec, split,
+                model_name, m, duration_sec, store_split,
                 kept_ids,
                 np.stack(per_modality[m]) if per_modality[m] else np.empty((0, dim)),
             )
