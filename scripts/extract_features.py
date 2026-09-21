@@ -23,6 +23,12 @@ def main():
     ap.add_argument("--store", required=True)
     ap.add_argument("--model", required=True)
     ap.add_argument("--duration-sec", type=int, default=600)
+    ap.add_argument("--chunk", type=int, default=None,
+                    help="process only contiguous chunk I (0-based) of every split; "
+                         "saved as <split>.chunkIIofNN.npz, merged by "
+                         "scripts/merge_feature_chunks.py")
+    ap.add_argument("--n-chunks", type=int, default=None,
+                    help="number of chunks each split is cut into (with --chunk)")
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--checkpoint", default=None)
     ap.add_argument("--allow-fallback", action="store_true")
@@ -37,9 +43,14 @@ def main():
         print(f"[skip] {args.model}: no weights available. Skipping cleanly.")
         return
 
+    # Extraction only needs splits and signals. Labels (hr_regression derived
+    # from every window's ECG) are built once by scripts/build_pulsedb_labels.py
+    # and read by the eval stages; building them here would cost each array
+    # task hours before its first feature.
     dataset = build_dataset_handle(
         args.dataset, args, degrade_kind=args.degrade_kind,
         degrade_severity=args.degrade_severity, seed=args.seed,
+        with_labels=False,
     )
     print(f"{args.dataset} cohort: {dataset.cohort.counts}")
 
@@ -52,7 +63,7 @@ def main():
         args.model, dataset, FeatureStore(Path(args.store) / args.dataset),
         duration_sec=args.duration_sec, device=args.device,
         allow_fallback=args.allow_fallback, checkpoint=args.checkpoint,
-        overwrite=args.overwrite,
+        overwrite=args.overwrite, chunk=args.chunk, n_chunks=args.n_chunks,
     )
 
 

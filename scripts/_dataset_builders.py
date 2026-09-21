@@ -23,6 +23,16 @@ from trustbio.pipeline import DatasetHandle
 DATASET_CHOICES = ["pulsedb_mimic", "pulsedb_vital", "mimic_ext_ppg", "but_ppg"]
 
 
+def _empty_labels(splits: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    """Label tables with the right index and no columns, for stages that never
+    read labels (extraction). Any later attempt to use them fails loudly with a
+    KeyError instead of silently training on nothing."""
+    return {
+        s: pd.DataFrame(index=pd.Index(df["visit_id"].astype(str), name="visit_id"))
+        for s, df in splits.items()
+    }
+
+
 def add_dataset_root_args(ap):
     """Shared --pulsedb-root/--mimic-ext-ppg-root/--but-ppg-root arguments."""
     from pathlib import Path
@@ -67,10 +77,16 @@ def wrap_loader_with_degradation(load_signal, kind, severity, seed):
 def build_dataset_handle(
     name: str, args, degrade_kind: str | None = None,
     degrade_severity: float | None = None, seed: int = 0,
+    with_labels: bool = True,
 ) -> DatasetHandle:
     """Build a DatasetHandle for one of DATASET_CHOICES from parsed CLI args
     (which must include --pulsedb-root/--mimic-ext-ppg-root/--but-ppg-root, via
-    add_dataset_root_args)."""
+    add_dataset_root_args).
+
+    `with_labels=False` skips the label tables entirely. Extraction never reads
+    them, and PulseDB's hr_regression is derived from every window's ECG (~4.5
+    ms/window measured), so building them inside each of ~90 array tasks would
+    cost hours per task for nothing."""
     if name == "pulsedb_mimic":
         cohort = build_pulsedb_cohort(
             args.pulsedb_root, source="mimic",
@@ -78,16 +94,19 @@ def build_dataset_handle(
         )
         splits = {s: cohort.split(s) for s in ("train", "val", "test")}
         loader = make_pulsedb_signal_loader(args.pulsedb_root, source="mimic")
-        # Build ONCE across all splits and slice, rather than three separate
-        # passes: hr_regression is derived from ECG, so each call reopens the
-        # subject .mat files (~16 min for the 100-subject pilot).
-        _all_ids = [v for df in splits.values() for v in df["visit_id"].tolist()]
-        _labels = build_pulsedb_label_table(
-            args.pulsedb_root, "mimic", _all_ids,
-            cache=getattr(args, "cohort_cache", None),
-        )
-        labels = {s: _labels.reindex(df["visit_id"].tolist())
-                  for s, df in splits.items()}
+        if with_labels:
+            # Build ONCE across all splits and slice, rather than three separate
+            # passes: hr_regression is derived from ECG, so each call reopens the
+            # subject .mat files (~16 min for the 100-subject pilot).
+            _all_ids = [v for df in splits.values() for v in df["visit_id"].tolist()]
+            _labels = build_pulsedb_label_table(
+                args.pulsedb_root, "mimic", _all_ids,
+                cache=getattr(args, "cohort_cache", None),
+            )
+            labels = {s: _labels.reindex(df["visit_id"].tolist())
+                      for s, df in splits.items()}
+        else:
+            labels = _empty_labels(splits)
     elif name == "pulsedb_vital":
         cohort = build_pulsedb_cohort(
             args.pulsedb_root, source="vital",
@@ -95,30 +114,40 @@ def build_dataset_handle(
         )
         splits = {s: cohort.split(s) for s in ("train", "val", "test")}
         loader = make_pulsedb_signal_loader(args.pulsedb_root, source="vital")
-        # Build ONCE across all splits and slice, rather than three separate
-        # passes: hr_regression is derived from ECG, so each call reopens the
-        # subject .mat files (~16 min for the 100-subject pilot).
-        _all_ids = [v for df in splits.values() for v in df["visit_id"].tolist()]
-        _labels = build_pulsedb_label_table(
-            args.pulsedb_root, "vital", _all_ids,
-            cache=getattr(args, "cohort_cache", None),
-        )
-        labels = {s: _labels.reindex(df["visit_id"].tolist())
-                  for s, df in splits.items()}
+        if with_labels:
+            # Build ONCE across all splits and slice, rather than three separate
+            # passes: hr_regression is derived from ECG, so each call reopens the
+            # subject .mat files (~16 min for the 100-subject pilot).
+            _all_ids = [v for df in splits.values() for v in df["visit_id"].tolist()]
+            _labels = build_pulsedb_label_table(
+                args.pulsedb_root, "vital", _all_ids,
+                cache=getattr(args, "cohort_cache", None),
+            )
+            labels = {s: _labels.reindex(df["visit_id"].tolist())
+                      for s, df in splits.items()}
+        else:
+            labels = _empty_labels(splits)
     elif name == "mimic_ext_ppg":
         cohort = build_mimic_ext_ppg_cohort(args.mimic_ext_ppg_root)
         splits = {s: cohort.split(s) for s in ("train", "val", "test")}
         loader = make_mimic_ext_ppg_signal_loader(args.mimic_ext_ppg_root)
-        meta = pd.read_csv(args.mimic_ext_ppg_root / "metadata.csv")
-        labels = {s: build_mimic_ext_ppg_label_table(meta, df["visit_id"].tolist())
-                  for s, df in splits.items()}
+        if with_labels:
+            # metadata.csv is 4.92 GB; reading it for extraction was pure waste.
+            meta = pd.read_csv(args.mimic_ext_ppg_root / "metadata.csv")
+            labels = {s: build_mimic_ext_ppg_label_table(meta, df["visit_id"].tolist())
+                      for s, df in splits.items()}
+        else:
+            labels = _empty_labels(splits)
     elif name == "but_ppg":
         cohort = build_but_ppg_cohort(args.but_ppg_root)
         splits = {s: cohort.split(s) for s in ("train", "val", "test")}
         loader = make_but_ppg_signal_loader(args.but_ppg_root)
-        qhr = pd.read_csv(args.but_ppg_root / "quality-hr-ann.csv")
-        labels = {s: build_but_ppg_label_table(qhr, df["visit_id"].tolist())
-                  for s, df in splits.items()}
+        if with_labels:
+            qhr = pd.read_csv(args.but_ppg_root / "quality-hr-ann.csv")
+            labels = {s: build_but_ppg_label_table(qhr, df["visit_id"].tolist())
+                      for s, df in splits.items()}
+        else:
+            labels = _empty_labels(splits)
     else:
         raise ValueError(f"unknown dataset {name!r}; expected one of {DATASET_CHOICES}")
 
