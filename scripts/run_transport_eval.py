@@ -22,6 +22,12 @@ def main():
     ap.add_argument("--duration-sec", type=int, default=600)
     ap.add_argument("--out", required=True)
     ap.add_argument(
+        "--models", nargs="+", default=None,
+        help="models to evaluate (default: available_models(), which gates on "
+             "weights/tokens being present -- but eval only needs the cached "
+             "features, so pass the extracted models explicitly)",
+    )
+    ap.add_argument(
         "--cohort-cache", type=Path, default=None,
         help="directory holding cached cohort AND label CSVs (e.g. the pilot's "
              "features_cache/pilot100). Without it the cohort build re-scans "
@@ -52,7 +58,7 @@ def main():
     mimic_store = FeatureStore(Path(args.store) / "pulsedb_mimic")
     vital_store = FeatureStore(Path(args.store) / "pulsedb_vital")
     all_records = []
-    for model_name in available_models():
+    for model_name in (args.models or available_models()):
         for modality in ("ecg", "ppg", "ecg_ppg_mean"):
             try:
                 records = both_directions(

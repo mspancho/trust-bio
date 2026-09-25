@@ -30,6 +30,12 @@ def main():
     ap.add_argument("--duration-sec", type=int, default=600)
     ap.add_argument("--eval-split", default="test")
     ap.add_argument("--out", required=True)
+    ap.add_argument(
+        "--models", nargs="+", default=None,
+        help="models to evaluate (default: available_models(), which gates on "
+             "weights/tokens being present -- but eval only needs the cached "
+             "features, so pass the extracted models explicitly)",
+    )
     args = ap.parse_args()
 
     dataset = build_dataset_handle(args.dataset, args)
@@ -39,7 +45,7 @@ def main():
     # (the same scoping extract_features.py writes with).
     store = FeatureStore(Path(args.store) / args.dataset)
     results_by_model = {}
-    for model_name in available_models():
+    for model_name in (args.models or available_models()):
         out = run_evaluation(
             model_name, dataset, store, eval_split=args.eval_split,
             duration_sec=args.duration_sec,
