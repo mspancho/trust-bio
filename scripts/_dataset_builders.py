@@ -6,6 +6,8 @@ than one of them depending on an artifact (e.g. a pickle file) the other
 produces."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
@@ -17,7 +19,7 @@ from trustbio.data.mimic_ext_ppg import (
 from trustbio.data.but_ppg import (
     build_but_ppg_cohort, build_but_ppg_label_table, make_but_ppg_signal_loader,
 )
-from trustbio.degradation.inject import apply_degradation
+from trustbio.degradation.inject import make_degraded_loader
 from trustbio.pipeline import DatasetHandle
 
 DATASET_CHOICES = ["pulsedb_mimic", "pulsedb_vital", "mimic_ext_ppg", "but_ppg"]
@@ -56,22 +58,9 @@ def add_dataset_root_args(ap):
 def wrap_loader_with_degradation(load_signal, kind, severity, seed):
     """Wrap a SignalLoader so ECG/PPG pairs pass through apply_degradation
     before the model's own preprocessing sees them. `kind=None` disables
-    degradation entirely (the clean baseline condition)."""
-    if kind is None or severity is None:
-        return load_signal
-    rng = np.random.default_rng(seed)
-
-    def degraded_load(visit_id, modality):
-        raw, sig_fs = load_signal(visit_id, modality)
-        if modality == "ecg":
-            ecg_out, _ = apply_degradation(raw, None, sig_fs, kind, severity, rng)
-            return ecg_out, sig_fs
-        _, ppg_out = apply_degradation(np.zeros_like(raw), raw, sig_fs, kind, severity, rng)
-        if ppg_out is None:
-            raise ValueError("missing_ppg degradation: PPG channel dropped for this visit")
-        return ppg_out, sig_fs
-
-    return degraded_load
+    degradation entirely (the clean baseline condition). Deterministic per
+    window -- see trustbio.degradation.inject.make_degraded_loader."""
+    return make_degraded_loader(load_signal, kind, severity, seed)
 
 
 def build_dataset_handle(
@@ -128,12 +117,16 @@ def build_dataset_handle(
         else:
             labels = _empty_labels(splits)
     elif name == "mimic_ext_ppg":
-        cohort = build_mimic_ext_ppg_cohort(args.mimic_ext_ppg_root)
+        # A taxonomy sample ships its own metadata subset (all columns, only
+        # the sampled rows) so nothing here re-reads the 4.9 GB metadata.csv.
+        cache_dir = getattr(args, "cohort_cache", None)
+        subset = Path(cache_dir) / "mimic_ext_ppg_metadata.csv" if cache_dir else None
+        meta = pd.read_csv(subset if subset is not None and subset.exists()
+                           else args.mimic_ext_ppg_root / "metadata.csv", low_memory=False)
+        cohort = build_mimic_ext_ppg_cohort(args.mimic_ext_ppg_root, metadata_csv=meta)
         splits = {s: cohort.split(s) for s in ("train", "val", "test")}
-        loader = make_mimic_ext_ppg_signal_loader(args.mimic_ext_ppg_root)
+        loader = make_mimic_ext_ppg_signal_loader(args.mimic_ext_ppg_root, meta)
         if with_labels:
-            # metadata.csv is 4.92 GB; reading it for extraction was pure waste.
-            meta = pd.read_csv(args.mimic_ext_ppg_root / "metadata.csv")
             labels = {s: build_mimic_ext_ppg_label_table(meta, df["visit_id"].tolist())
                       for s, df in splits.items()}
         else:

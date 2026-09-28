@@ -7,6 +7,8 @@ reads zero; a missing channel is simply absent).
 """
 from __future__ import annotations
 
+import hashlib
+
 import numpy as np
 
 from .calibrate import load_cached_noise_amplitude
@@ -87,3 +89,36 @@ def apply_degradation(
         return inject_lead_off(ecg, severity, rng), ppg
     # kind == "missing_ppg"
     return ecg, inject_missing_ppg(ppg)
+
+
+def visit_rng(seed: int, visit_id: str, kind: str, severity: float,
+              modality: str) -> np.random.Generator:
+    """Generator whose stream is a pure function of (seed, window, condition,
+    modality). Degradation must be reproducible per window: the fault-taxonomy
+    analysis recomputes signal-quality traces on the SAME corrupted waveform a
+    model was fed, in another process and another order. A generator shared
+    across windows made the corrupted span depend on call order."""
+    key = f"{seed}|{visit_id}|{kind}|{severity}|{modality}".encode()
+    return np.random.default_rng(int(hashlib.sha256(key).hexdigest()[:16], 16))
+
+
+def make_degraded_loader(load_signal, kind: str | None, severity: float | None,
+                         seed: int, noise_amplitudes: dict[float, float] | None = None):
+    """Wrap a SignalLoader so ECG/PPG pass through apply_degradation before any
+    model preprocessing. `kind=None` (or `severity=None`) returns the loader
+    unchanged -- the clean baseline."""
+    if kind is None or severity is None:
+        return load_signal
+
+    def degraded_load(visit_id, modality):
+        raw, sig_fs = load_signal(visit_id, modality)
+        rng = visit_rng(seed, str(visit_id), kind, severity, modality)
+        if modality == "ecg":
+            ecg_out, _ = apply_degradation(raw, None, sig_fs, kind, severity, rng, noise_amplitudes)
+            return ecg_out, sig_fs
+        _, ppg_out = apply_degradation(np.zeros_like(raw), raw, sig_fs, kind, severity, rng, noise_amplitudes)
+        if ppg_out is None:
+            raise ValueError("missing_ppg degradation: PPG channel dropped for this visit")
+        return ppg_out, sig_fs
+
+    return degraded_load
