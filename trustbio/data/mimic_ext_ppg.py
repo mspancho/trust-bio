@@ -2,6 +2,10 @@
 labels and pre-computed signal quality indices (confirmed schema — see Task 9
 docstring in the implementation plan for the exact metadata.csv columns).
 
+Visit ids are `signal_file_name` (e.g. "3000060_0002_0_2"), the only unique
+per-segment key in the real metadata.csv -- `segment_id` there is a small
+integer that repeats across records.
+
 Rhythm classification is scoped to sinus rhythm (SR) vs. atrial fibrillation
 (AF) — the two most prevalent labels in event_rhythm — with all other rhythms
 (STACH, VPACE, SBRAD, etc.) treated as missing for this task, matching the
@@ -9,7 +13,7 @@ Rhythm classification is scoped to sinus rhythm (SR) vs. atrial fibrillation
 """
 from __future__ import annotations
 
-import ast
+import re
 from pathlib import Path
 
 import numpy as np
@@ -41,8 +45,11 @@ def build_mimic_ext_ppg_cohort(
     root = Path(root)
     meta = metadata_csv if metadata_csv is not None else _load_metadata(root)
     df = meta[[
-        "segment_id", "subject_id", "vector_10s_pleth_sqi", "vector_10s_ecg_sqi",
-    ]].rename(columns={"segment_id": "visit_id"}).copy()
+        "signal_file_name", "subject_id", "vector_10s_pleth_sqi", "vector_10s_ecg_sqi",
+    ]].rename(columns={"signal_file_name": "visit_id"}).copy()
+    df["visit_id"] = df["visit_id"].astype(str)
+    if not df["visit_id"].is_unique:
+        raise ValueError("signal_file_name is not unique -- cannot serve as visit_id")
     df["split"] = chronological_or_random_split(
         df, subject_col="subject_id", time_col=None, seed=seed,
     )
@@ -59,7 +66,7 @@ def make_mimic_ext_ppg_signal_loader(root: str | Path, metadata: pd.DataFrame | 
     """
     root = Path(root)
     meta = metadata if metadata is not None else _load_metadata(root)
-    meta = meta.set_index("segment_id")
+    meta = meta.set_index(meta["signal_file_name"].astype(str))
     cache: dict[str, dict] = {}
 
     def load(visit_id: str, modality: str):
@@ -98,14 +105,29 @@ def build_mimic_ext_ppg_label_table(
 ) -> pd.DataFrame:
     """hr_regression from median_30s_hr; rhythm_cls from event_rhythm, scoped
     to SR (0) vs. AF (1), NaN for any other rhythm label."""
-    meta = metadata.set_index("segment_id").reindex(visit_ids)
+    meta = metadata.set_index(metadata["signal_file_name"].astype(str)).reindex([str(v) for v in visit_ids])
     out = pd.DataFrame(index=pd.Index(visit_ids, name="visit_id"))
     out["hr_regression"] = pd.to_numeric(meta["median_30s_hr"], errors="coerce").to_numpy()
     out["rhythm_cls"] = meta["event_rhythm"].map(_RHYTHM_MAP).astype(float).to_numpy()
     return out
 
 
-def parse_sqi_vector(sqi_str: str) -> np.ndarray:
-    """Parse a stringified SQI vector column (e.g. "[1, 1, 0]") into an array.
-    Used by taxonomy/features.py (Task 13) to read the native SQI columns."""
-    return np.asarray(ast.literal_eval(sqi_str), dtype=float)
+# Lookbehind keeps the "64" (and its trailing "4") of "np.float64(" from being
+# read as values: a number may not start right after a letter, digit or dot.
+_SQI_TOKEN = re.compile(r"(?<![A-Za-z0-9_.])(?:nan|-?\d+(?:\.\d+)?)")
+
+
+def parse_sqi_vector(sqi_str) -> np.ndarray:
+    """Parse a stringified SQI vector into floats. Real values look like
+    "[1, 1, -2]", "[nan, nan, nan]" or "[np.float64(86.21), nan]" -- the numpy
+    repr breaks ast.literal_eval, so pull the numbers out with a regex."""
+    if not isinstance(sqi_str, str):
+        return np.array([np.nan])
+    return np.asarray([float(t) for t in _SQI_TOKEN.findall(sqi_str)], dtype=float)
+
+
+def first_sqi_code(sqi_str) -> float:
+    """Native SQI code of the FIRST 10-s sub-window -- the one the models see
+    at duration_sec=10 (encode_modality keeps the first duration_sec seconds)."""
+    v = parse_sqi_vector(sqi_str)
+    return float(v[0]) if len(v) else float("nan")

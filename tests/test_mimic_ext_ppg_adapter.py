@@ -4,8 +4,8 @@ import pytest
 import wfdb
 
 from trustbio.data.mimic_ext_ppg import (
-    build_mimic_ext_ppg_cohort, build_mimic_ext_ppg_label_table,
-    make_mimic_ext_ppg_signal_loader,
+    build_mimic_ext_ppg_cohort, build_mimic_ext_ppg_label_table, first_sqi_code,
+    make_mimic_ext_ppg_signal_loader, parse_sqi_vector,
 )
 
 
@@ -37,11 +37,15 @@ def fake_metadata_and_waveforms(tmp_path):
             # This fixture previously set folder_path=<dir>+"/", which made the
             # adapter's (incorrect) folder_path/signal_file_name join look right
             # here while failing on every real record.
-            "segment_id": seg_name, "signal_file_name": seg_name,
+            # And segment_id is a small integer that REPEATS across records
+            # (2, 4, ...); only signal_file_name is unique.
+            "segment_id": i % 3, "signal_file_name": seg_name,
             "folder_path": f"{folder}/{seg_name}",
             "subject_id": i, "event_rhythm": "SR" if i % 2 == 0 else "AF",
-            "median_30s_hr": 70.0 + i, "vector_10s_pleth_sqi": "[1, 1, 1]",
-            "vector_10s_ecg_sqi": "[1, 1, 1]", "strat_fold": i % 10,
+            "median_30s_hr": 70.0 + i,
+            "vector_10s_pleth_sqi": "[1, 1, 0]" if i % 4 else "[0, 1, 1]",
+            "vector_10s_ecg_sqi": "[1, -2, 1]" if i % 2 else "[1, 1, 1]",
+            "strat_fold": i % 10,
         })
     meta = pd.DataFrame(rows)
     meta.to_csv(root / "metadata.csv", index=False)
@@ -69,8 +73,25 @@ def test_signal_loader_reads_ecg_and_ppg(fake_metadata_and_waveforms):
 
 def test_label_table_maps_rhythm_and_hr(fake_metadata_and_waveforms):
     root, meta = fake_metadata_and_waveforms
-    labels = build_mimic_ext_ppg_label_table(meta, visit_ids=meta["segment_id"].tolist())
+    labels = build_mimic_ext_ppg_label_table(meta, visit_ids=meta["signal_file_name"].tolist())
     assert set(labels.columns) == {"hr_regression", "rhythm_cls"}
     assert labels.loc["p000000_seg1", "rhythm_cls"] == 0.0   # SR
     assert labels.loc["p000001_seg1", "rhythm_cls"] == 1.0   # AF
     assert labels["hr_regression"].notna().all()
+
+
+def test_cohort_visit_ids_are_unique_record_names(fake_metadata_and_waveforms):
+    root, meta = fake_metadata_and_waveforms
+    cohort = build_mimic_ext_ppg_cohort(root, metadata_csv=meta)
+    assert cohort.visits["visit_id"].is_unique
+    assert set(cohort.visits["visit_id"]) == set(meta["signal_file_name"])
+
+
+def test_parse_sqi_vector_handles_real_formats():
+    assert parse_sqi_vector("[1, 1, -2]").tolist() == [1.0, 1.0, -2.0]
+    v = parse_sqi_vector("[np.float64(86.21), np.float64(87.21), nan]")
+    assert v[:2].tolist() == [86.21, 87.21] and np.isnan(v[2])
+    assert np.isnan(parse_sqi_vector("[nan, nan, nan]")).all()
+    assert first_sqi_code("[0, 1, 1]") == 0.0
+    assert np.isnan(first_sqi_code("[nan, 1, 1]"))
+    assert np.isnan(first_sqi_code(float("nan")))
