@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 
@@ -50,16 +51,34 @@ def sample_subjects(df: pd.DataFrame, n_subjects: int, seed: int) -> pd.DataFram
     return df[df["subject_id"].isin(keep)]
 
 
+def cap_windows_per_subject(df: pd.DataFrame, n: int) -> pd.DataFrame:
+    """Keep at most `n` windows per subject, evenly spaced through the
+    subject's recording (windows are in chronological order in the cohort),
+    preserving row order. The taxonomy needs breadth across subjects more than
+    depth within one; 60 subjects x 40 windows beats 4 subjects x 600."""
+    if n is None or n <= 0:
+        return df
+    kept = []
+    for _, g in df.groupby("subject_id", sort=False):
+        idx = np.unique(np.round(np.linspace(0, len(g) - 1, min(n, len(g)))).astype(int))
+        kept.append(g.iloc[idx])
+    kept_index = pd.concat(kept).index
+    return df.loc[df.index.isin(kept_index)]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cohort", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--n-subjects", type=int, required=True)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--max-windows-per-subject", type=int, default=None,
+                    help="keep at most this many evenly spaced windows per sampled subject")
     a = ap.parse_args()
 
     df = pd.read_csv(a.cohort, dtype={"visit_id": str, "subject_id": str})
     out = sample_subjects(df, a.n_subjects, a.seed)
+    out = cap_windows_per_subject(out, a.max_windows_per_subject)
 
     # A subject must never appear in more than one split.
     leaked = out.groupby("subject_id")["split"].nunique()

@@ -40,3 +40,19 @@ def test_build_dataset_handle_without_labels_never_opens_subject_files(tmp_path)
     # subject files on disk must fail -- which proves the flag is what skipped it.
     with pytest.raises(Exception):
         build_dataset_handle("pulsedb_mimic", args, with_labels=True)
+
+
+def test_mimic_ext_handle_reads_metadata_subset_from_cohort_cache(tmp_path):
+    cache = tmp_path / "cache"; cache.mkdir()
+    meta = pd.DataFrame({
+        "signal_file_name": ["r1", "r2", "r3"], "subject_id": [1, 2, 3],
+        "folder_path": ["p00/p1/r1", "p00/p2/r2", "p00/p3/r3"],
+        "vector_10s_pleth_sqi": ["[1, 1, 1]"] * 3, "vector_10s_ecg_sqi": ["[1, 1, 1]"] * 3,
+        "median_30s_hr": [70.0, 71.0, 72.0], "event_rhythm": ["SR", "AF", "SR"],
+    })
+    meta.to_csv(cache / "mimic_ext_ppg_metadata.csv", index=False)
+    args = argparse.Namespace(mimic_ext_ppg_root=tmp_path / "no-such-root", cohort_cache=cache)
+    handle = build_dataset_handle("mimic_ext_ppg", args, with_labels=True)
+    all_ids = sorted(v for df in handle.splits.values() for v in df["visit_id"])
+    assert all_ids == ["r1", "r2", "r3"]
+    assert handle.label_table[next(iter(handle.splits))].columns.tolist() == ["hr_regression", "rhythm_cls"]
