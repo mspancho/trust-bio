@@ -9,6 +9,18 @@ from trustbio.config import DEGRADATION_SEVERITIES
 from trustbio.degradation.calibrate import fit_motion_noise_amplitude
 
 
+@pytest.fixture(autouse=True)
+def _isolate_noise_cache(tmp_path, monkeypatch):
+    """fit_motion_noise_amplitude(cache=True) writes NOISE_AMPLITUDE_CACHE_PATH.
+    Left pointing at the repo, the test suite overwrote the real
+    features_cache/noise_amplitude_cache.json with fixture-derived numbers
+    (observed 2026-09-25). Every test in this module gets a throwaway path."""
+    monkeypatch.setattr(
+        "trustbio.degradation.calibrate.NOISE_AMPLITUDE_CACHE_PATH",
+        tmp_path / "noise_amplitude_cache.json",
+    )
+
+
 @pytest.fixture
 def fake_but_ppg_with_accel(tmp_path):
     root = tmp_path / "but-ppg"
@@ -71,3 +83,12 @@ def test_fit_writes_cache_file(fake_but_ppg_with_accel, tmp_path, monkeypatch):
     assert cache_path.exists()
     cached = json.loads(cache_path.read_text())
     assert set(float(k) for k in cached.keys()) == set(DEGRADATION_SEVERITIES)
+
+
+def test_fit_never_writes_the_production_cache(fake_but_ppg_with_accel, tmp_path):
+    from trustbio.degradation import calibrate
+    fit_motion_noise_amplitude(fake_but_ppg_with_accel)          # default cache=True
+    assert calibrate.NOISE_AMPLITUDE_CACHE_PATH.parent == tmp_path, (
+        "the autouse fixture must redirect the cache path; without it this call "
+        "overwrote features_cache/noise_amplitude_cache.json with fixture numbers"
+    )
