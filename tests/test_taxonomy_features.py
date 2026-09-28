@@ -1,7 +1,8 @@
 import numpy as np
+import pytest
 
 from trustbio.taxonomy.features import (
-    SegmentFaultFeatures, extract_fault_features, features_to_matrix,
+    FEATURE_NAMES, SegmentFaultFeatures, extract_fault_features, features_to_matrix,
 )
 
 
@@ -50,5 +51,26 @@ def test_features_to_matrix_shape_and_names():
         extract_fault_features(np.zeros(5), None, 1, "pulsedb_vital", 70, 90, 5.0),
     ]
     X, names = features_to_matrix(feats)
-    assert X.shape == (2, 5)
-    assert names == ["sqi_value", "sqi_drop_duration", "accel_corr", "source_db", "model_disagreement"]
+    assert X.shape == (2, 7)
+    assert names == FEATURE_NAMES
+    assert np.isnan(X[:, 5]).all() and np.isnan(X[:, 6]).all()   # no per-modality traces given
+
+
+def test_per_modality_sqi_values_are_recorded():
+    feats = extract_fault_features(
+        sqi_trace=np.array([1, 0, 1, 1.0]), accel_trace=None, fs=1, source_db="pulsedb_mimic",
+        model_a_pred=70, model_b_pred=72, disagreement_scale=2.0,
+        ecg_sqi_trace=np.array([1, 0, 1, 1.0]), ppg_sqi_trace=np.array([1, 1, 1, 0.5]),
+    )
+    assert feats.ecg_sqi_value == 0.75 and feats.ppg_sqi_value == 0.875
+    assert feats.model_disagreement == 1.0
+
+
+def test_features_to_matrix_column_subset_keeps_requested_order():
+    feats = [extract_fault_features(np.ones(3), None, 1, "a", 70, 71, 1.0),
+             extract_fault_features(np.zeros(3), None, 1, "b", 70, 75, 1.0)]
+    X, names = features_to_matrix(feats, columns=["model_disagreement", "sqi_value"])
+    assert names == ["model_disagreement", "sqi_value"]
+    assert X.tolist() == [[1.0, 1.0], [5.0, 0.0]]
+    with pytest.raises(KeyError):
+        features_to_matrix(feats, columns=["not_a_feature"])

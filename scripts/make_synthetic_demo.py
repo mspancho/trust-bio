@@ -14,7 +14,7 @@ from trustbio.config import ALL_TASKS, MODALITIES
 from trustbio.pipeline import DatasetHandle, extract_features_for_model, run_evaluation
 from trustbio.store import FeatureStore
 from trustbio.taxonomy.cluster import cluster_fault_segments, name_clusters, confusion_against_known_conditions
-from trustbio.taxonomy.features import extract_fault_features, features_to_matrix
+from trustbio.taxonomy.features import FEATURE_NAMES, extract_fault_features, features_to_matrix
 
 
 def _synthetic_dataset_handle(n_visits: int, seed: int) -> DatasetHandle:
@@ -76,7 +76,8 @@ def main():
         )
         for _ in range(30)
     ]
-    X, _names = features_to_matrix(feats)
+    # The demo gives no per-modality SQI traces, so drop those (NaN) columns.
+    X, _names = features_to_matrix(feats, columns=FEATURE_NAMES[:5])
     labels = cluster_fault_segments(X, seed=0)
     print(f"  cluster sizes: {np.bincount(labels)}")
 

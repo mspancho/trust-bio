@@ -16,6 +16,9 @@ structural site/device shift without any diagnostic label:
     the same data disagree sharply despite a clean SQI are the structural-
     shift signature the paper draft describes (Results: "quality indices ...
     also flag segments that are clean but out-of-distribution").
+  - ecg_sqi_value / ppg_sqi_value: mean per-modality quality. Added because
+    lead-off (flat ECG) and motion artifact (noisy PPG) share span lengths at
+    equal injected severity and differ only in WHICH channel dropped.
 """
 from __future__ import annotations
 
@@ -31,6 +34,12 @@ class SegmentFaultFeatures:
     accel_corr: float
     source_db: str
     model_disagreement: float
+    ecg_sqi_value: float = float("nan")
+    ppg_sqi_value: float = float("nan")
+
+
+FEATURE_NAMES = ["sqi_value", "sqi_drop_duration", "accel_corr", "source_db",
+                 "model_disagreement", "ecg_sqi_value", "ppg_sqi_value"]
 
 
 _LOW_SQI_THRESHOLD = 0.5
@@ -65,28 +74,42 @@ def extract_fault_features(
     model_a_pred: float,
     model_b_pred: float,
     disagreement_scale: float,
+    ecg_sqi_trace: np.ndarray | None = None,
+    ppg_sqi_trace: np.ndarray | None = None,
 ) -> SegmentFaultFeatures:
+    """`sqi_trace` is the combined (min over modalities) per-second quality;
+    the optional per-modality traces add which channel lost quality -- the
+    only thing that separates a flat ECG electrode from a noisy PPG at equal
+    span length."""
+    sqi_trace = np.asarray(sqi_trace, dtype=float)
     return SegmentFaultFeatures(
         sqi_value=float(np.mean(sqi_trace)),
         sqi_drop_duration=float(_longest_low_sqi_run(sqi_trace)),
         accel_corr=_accel_sqi_correlation(sqi_trace, accel_trace),
         source_db=source_db,
         model_disagreement=float(abs(model_a_pred - model_b_pred) / disagreement_scale),
+        ecg_sqi_value=float(np.mean(ecg_sqi_trace)) if ecg_sqi_trace is not None else float("nan"),
+        ppg_sqi_value=float(np.mean(ppg_sqi_trace)) if ppg_sqi_trace is not None else float("nan"),
     )
 
 
 def features_to_matrix(
-    features: list[SegmentFaultFeatures],
+    features: list[SegmentFaultFeatures], columns: list[str] | None = None,
 ) -> tuple[np.ndarray, list[str]]:
-    """Encode `source_db` as an integer category code (stable ordering by
-    first appearance) alongside the four numeric features."""
-    names = ["sqi_value", "sqi_drop_duration", "accel_corr", "source_db", "model_disagreement"]
-    sources = [f.source_db for f in features]
-    unique_sources = sorted(set(sources))
-    source_code = {s: i for i, s in enumerate(unique_sources)}
-    rows = [
-        [f.sqi_value, f.sqi_drop_duration, f.accel_corr,
-         float(source_code[f.source_db]), f.model_disagreement]
-        for f in features
-    ]
-    return np.asarray(rows, dtype=np.float64), names
+    """Numeric matrix over `columns` (default FEATURE_NAMES). `source_db` is
+    encoded as an integer category code, ordered by sorted name."""
+    names = list(columns) if columns is not None else list(FEATURE_NAMES)
+    unknown = [c for c in names if c not in FEATURE_NAMES]
+    if unknown:
+        raise KeyError(f"unknown feature columns {unknown}; choose from {FEATURE_NAMES}")
+    source_code = {s: i for i, s in enumerate(sorted({f.source_db for f in features}))}
+    rows = []
+    for f in features:
+        values = {
+            "sqi_value": f.sqi_value, "sqi_drop_duration": f.sqi_drop_duration,
+            "accel_corr": f.accel_corr, "source_db": float(source_code[f.source_db]),
+            "model_disagreement": f.model_disagreement,
+            "ecg_sqi_value": f.ecg_sqi_value, "ppg_sqi_value": f.ppg_sqi_value,
+        }
+        rows.append([values[c] for c in names])
+    return np.asarray(rows, dtype=np.float64).reshape(len(rows), len(names)), names
