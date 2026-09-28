@@ -64,3 +64,22 @@ def test_merge_sbatch_dry_run(tmp_path):
     assert r.returncode == 0, r.stderr
     assert "scripts/merge_feature_chunks.py" in r.stdout
     assert "--model papagei --dataset pulsedb_mimic --duration-sec 10 --store /s --cohort-cache /c" in r.stdout
+
+
+def test_dry_run_condition_fields_set_store_subdir_and_degrade_flags(tmp_path):
+    manifest = tmp_path / "m.txt"
+    manifest.write_text("papagei pulsedb_vital 10 cond=lead_off_0.3 kind=lead_off sev=0.3\n"
+                        "papagei but_ppg 10 cond=clean\n")
+    r = _run("scripts/extract_features.sbatch", manifest, 0)
+    assert r.returncode == 0, r.stderr
+    assert "--store /s/lead_off_0.3" in r.stdout
+    assert "--degrade-kind lead_off --degrade-severity 0.3" in r.stdout
+    r = _run("scripts/extract_features.sbatch", manifest, 1)
+    assert "--store /s/clean" in r.stdout and "--degrade-kind" not in r.stdout
+
+
+def test_dry_run_condition_fields_coexist_with_chunks(tmp_path):
+    manifest = tmp_path / "m.txt"
+    manifest.write_text("papagei pulsedb_mimic 10 3 8 cond=motion_artifact_0.6 kind=motion_artifact sev=0.6\n")
+    r = _run("scripts/extract_features.sbatch", manifest, 0)
+    assert "--chunk 3 --n-chunks 8" in r.stdout and "--store /s/motion_artifact_0.6" in r.stdout

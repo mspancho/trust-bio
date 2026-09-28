@@ -23,15 +23,30 @@ cd "${REPO_DIR}"
 
 i="${SLURM_ARRAY_TASK_ID:-0}"
 LINE=$(sed -n "$((i+1))p" "${MANIFEST}")
-read -r MODEL DATASET DURATION CHUNK NCHUNKS <<<"${LINE}"
+read -r MODEL DATASET DURATION REST <<<"${LINE}"
 if [[ -z "${MODEL:-}" || -z "${DATASET:-}" ]]; then
   echo "[extract] no manifest line $((i+1)) in ${MANIFEST}" >&2
   exit 2
 fi
 DURATION="${DURATION:-${TRUSTBIO_DURATION:-600}}"
+# Optional trailing fields: positional `chunk n_chunks`, then name=value
+# fields `cond=NAME` (store subdir), `kind=KIND sev=SEV` (degradation).
+CHUNK=""; NCHUNKS=""; COND=""; KIND=""; SEV=""; POS=()
+for field in ${REST:-}; do
+  case "${field}" in
+    cond=*) COND="${field#cond=}" ;;
+    kind=*) KIND="${field#kind=}" ;;
+    sev=*)  SEV="${field#sev=}" ;;
+    *)      POS+=("${field}") ;;
+  esac
+done
+if [[ ${#POS[@]} -ge 2 ]]; then CHUNK="${POS[0]}"; NCHUNKS="${POS[1]}"; fi
+CELL_STORE="${STORE}${COND:+/${COND}}"
 
 CHUNK_ARGS=()
-[[ -n "${CHUNK:-}" ]] && CHUNK_ARGS=(--chunk "${CHUNK}" --n-chunks "${NCHUNKS}")
+[[ -n "${CHUNK}" ]] && CHUNK_ARGS=(--chunk "${CHUNK}" --n-chunks "${NCHUNKS}")
+DEGRADE_ARGS=()
+[[ -n "${KIND}" ]] && DEGRADE_ARGS=(--degrade-kind "${KIND}" --degrade-severity "${SEV}")
 OVERWRITE_ARG=()
 [[ "${TRUSTBIO_OVERWRITE:-0}" == "1" ]] && OVERWRITE_ARG=(--overwrite)
 # ecg-domain is neurokit2 feature extraction -- pure CPU, no GPU kernels; it
@@ -41,12 +56,12 @@ DEVICE="${TRUSTBIO_DEVICE:-cuda}"
 CACHE_ARG=()
 [[ -n "${TRUSTBIO_COHORT_CACHE:-}" ]] && CACHE_ARG=(--cohort-cache "${TRUSTBIO_COHORT_CACHE}")
 
-echo "[extract] task ${i}: model=${MODEL} dataset=${DATASET} duration=${DURATION}s chunk=${CHUNK:-all}/${NCHUNKS:-1} device=${DEVICE} store=${STORE} host=$(hostname)"
+echo "[extract] task ${i}: model=${MODEL} dataset=${DATASET} duration=${DURATION}s chunk=${CHUNK:-all}/${NCHUNKS:-1} cond=${COND:-none} device=${DEVICE} store=${CELL_STORE} host=$(hostname)"
 
 CMD=(conda run -n "${ENV_NAME}" python scripts/extract_features.py
      --model "${MODEL}" --dataset "${DATASET}" --duration-sec "${DURATION}"
-     --device "${DEVICE}" --store "${STORE}"
-     "${CHUNK_ARGS[@]}" "${CACHE_ARG[@]}" "${OVERWRITE_ARG[@]}")
+     --device "${DEVICE}" --store "${CELL_STORE}"
+     "${CHUNK_ARGS[@]}" "${DEGRADE_ARGS[@]}" "${CACHE_ARG[@]}" "${OVERWRITE_ARG[@]}")
 echo "[extract] cmd: ${CMD[*]}"
 if [[ "${TRUSTBIO_DRY_RUN:-0}" == "1" ]]; then
   exit 0
