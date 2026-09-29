@@ -2377,6 +2377,26 @@ git push origin main
 
 ---
 
+### Task 14 (follow-up, added 2026-09-29): Supervised separability ceiling
+
+**Files:**
+- Create: `scripts/run_taxonomy_supervised.py`
+- Test: `tests/test_run_taxonomy_supervised.py` (create)
+
+**Interfaces:**
+- Consumes: `results/taxonomy/fault_features.csv` (Task 10), `FEATURE_SETS` / `FIT_CONDITIONS` from `scripts/run_taxonomy.py`, `bootstrap_recall` / `condition_recall` from `trustbio.taxonomy.cluster`.
+- Produces (in `--out-dir`): `supervised_recall.csv` (`model, feature_set, condition, dataset, severity, n, recall, ci_lo, ci_hi` from out-of-fold predictions), `supervised_confusion_<model>_<set>.csv`, `supervised_heldout_<model>_<set>.csv` (share of each held-out group assigned to each class by a model fit on all fit rows), `supervised_summary.json` (macro-F1 per model/set; `structural_vs_clean_auroc` per set — clean Vital vs clean MIMIC, subject-grouped out-of-fold).
+- CLI: `python scripts/run_taxonomy_supervised.py --features-csv results/taxonomy/fault_features.csv --out-dir results/taxonomy [--models logreg hgb] [--seed 0] [--n-boot 200]`.
+
+Why: the draft's Methods names this alternative explicitly. KMeans(k=3) answered "do the classes fall out unsupervised?" (severe ones do); a classifier trained on the known synthetic labels with subject-grouped CV answers "are they separable at all with these features?" — e.g. moderate lead-off is detected in 100% of windows yet gets no cluster. Structural is tested twice: as the third class, and as clean-Vital-vs-clean-MIMIC, where mild synthetic rows cannot confound it.
+
+- [ ] **Step 1: Write the failing test** — `tests/test_run_taxonomy_supervised.py`: build a separable synthetic table (as in `tests/test_run_taxonomy.py`, with `structural` rows carrying high `model_disagreement`), run `main([...])`, assert the four artifacts exist, out-of-fold recall > 0.9 for all three conditions with `logreg`/`all`, `structural_vs_clean_auroc["all"] > 0.9`, and the held-out table has rows for `clean` and `real_motion`.
+- [ ] **Step 2: Run to verify it fails** — `ModuleNotFoundError: scripts.run_taxonomy_supervised`.
+- [ ] **Step 3: Create `scripts/run_taxonomy_supervised.py`** — `make_model(name)` (`logreg`: StandardScaler + multinomial LogisticRegression(class_weight="balanced", max_iter=2000); `hgb`: HistGradientBoostingClassifier(class_weight="balanced")); `oof_predictions(X, y, groups, model_name, seed)` via GroupKFold(5); recall rows by (condition, dataset, severity) with `bootstrap_recall`; held-out assignment from a model fit on all fit rows; `structural_vs_clean_auroc` via GroupKFold out-of-fold probabilities.
+- [ ] **Step 4: Run the test** — 1 passed.
+- [ ] **Step 5: Run on the real table** (login node is fine: 49k rows × 9 features) and read `supervised_recall.csv` by severity, the held-out shares, and the structural AUROCs.
+- [ ] **Step 6: Commit** — `feat: supervised separability ceiling for the fault taxonomy`.
+
 ## Outcome (2026-09-29, after Task 13)
 
 Executed end to end; final analysis job 54713469 on a store verified across all seven conditions. Result, honestly: the label-free KMeans(k=3) taxonomy recovers the two synthetic fault kinds almost perfectly when they are severe (severity 0.6: lead-off recall 0.99, motion 1.00; only 54 + 136 cross-assignments out of ~13k) and essentially not at all when mild or moderate (0.1/0.3: recall ≤ 0.02), because with severities anchored to real smartphone-PPG noise quantiles only the 95th-percentile level crosses the quality-zero threshold, and a 1–3 s fault leaves 10-s summaries near clean; the third cluster is "everything mild" and k=3 cannot split it. The `structural` class (clean cross-institution windows) has no SQI signature and only a weak disagreement signal (AUROC 0.62 vs clean MIMIC) — recall 0.0 in every feature set, i.e. not identifiable with these features on this institution pair, consistent with the small transport gap for HR. Real-world held-out groups: BUT PPG real-motion windows land in the motion cluster 14% of the time vs 8% for its clean recordings (its human quality label relates only weakly to signal noise, AUROC 0.57); MIMIC-ext's native poor-PPG/poor-ECG segments are mostly not 1-s-resolution noise bursts or flat lines (any-drop 2–5%). Native-SQI validation of our traces: PPG AUROC 0.65, ECG 0.51. Calibration used: amplitudes 0.18/0.31/1.30 × signal std. The first run's results (HF-residual ECG SQI, unfitted PPG reference) are kept in `results/taxonomy_v1_hfecg/` for the record. Natural next steps, not executed: the draft's own alternative of a supervised classifier on the same features (measures the separability ceiling — e.g. moderate lead-off IS detectable, 100% any-drop, but k=3 cannot allocate it a cluster), and clustering only SQI-detected degraded windows with k chosen by silhouette.
