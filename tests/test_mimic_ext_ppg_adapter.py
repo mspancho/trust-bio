@@ -80,6 +80,23 @@ def test_label_table_maps_rhythm_and_hr(fake_metadata_and_waveforms):
     assert labels["hr_regression"].notna().all()
 
 
+def test_signal_loader_reads_missing_samples_as_flat_line(tmp_path):
+    root = tmp_path / "mimic-iii-ext-ppg"
+    (root / "p00/p000009").mkdir(parents=True)
+    fs, n = 125, 125 * 30
+    rng = np.random.default_rng(9)
+    ecg = rng.standard_normal(n).astype(np.float32); ecg[100:300] = np.nan     # a 1.6-s dropout
+    pleth = rng.standard_normal(n).astype(np.float32)
+    wfdb.wrsamp("p000009_seg1", fs=fs, units=["mV", "NU"], sig_name=["II", "PLETH"],
+                p_signal=np.stack([ecg, pleth], axis=1), write_dir=str(root / "p00/p000009"), fmt=["16", "16"])
+    meta = pd.DataFrame([{"segment_id": 0, "signal_file_name": "p000009_seg1",
+                          "folder_path": "p00/p000009/p000009_seg1", "subject_id": 9}])
+    load = make_mimic_ext_ppg_signal_loader(root, meta)
+    ecg_out, _ = load("p000009_seg1", "ecg")
+    assert np.isfinite(ecg_out).all()
+    assert (ecg_out[100:300] == 0.0).all() and np.abs(ecg_out[:100]).sum() > 0
+
+
 def test_cohort_visit_ids_are_unique_record_names(fake_metadata_and_waveforms):
     root, meta = fake_metadata_and_waveforms
     cohort = build_mimic_ext_ppg_cohort(root, metadata_csv=meta)

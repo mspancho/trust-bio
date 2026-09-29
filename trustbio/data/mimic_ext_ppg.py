@@ -86,9 +86,14 @@ def make_mimic_ext_ppg_signal_loader(root: str | Path, metadata: pd.DataFrame | 
             sig_names = [s.upper() for s in rec.sig_name]
             ecg_idx = sig_names.index("II")
             ppg_idx = sig_names.index("PLETH")
+            # wfdb reads missing samples as NaN. Read them as a flat line: a
+            # monitor dropout is the failure the lead-off condition simulates,
+            # and NaN would poison every downstream z-normalisation (the
+            # native ECG SQI code -3 marks exactly these segments).
+            p_signal = np.nan_to_num(np.asarray(rec.p_signal, dtype=np.float32), nan=0.0)
             cache[visit_id] = {
-                "ecg": np.asarray(rec.p_signal)[:, ecg_idx].astype(np.float32),
-                "ppg": np.asarray(rec.p_signal)[:, ppg_idx].astype(np.float32),
+                "ecg": p_signal[:, ecg_idx],
+                "ppg": p_signal[:, ppg_idx],
                 "fs": rec.fs,
             }
         entry = cache[visit_id]

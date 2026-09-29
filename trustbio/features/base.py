@@ -93,6 +93,13 @@ class FeatureExtractor(abc.ABC):
     def encode_modality(self, raw: np.ndarray, fs_in: int, modality: str,
                         duration_sec: int) -> np.ndarray:
         """Raw signal -> mean-pooled visit feature vector for one modality."""
+        # Bound the RAW signal to the analysed duration before preprocessing.
+        # Preprocessing z-normalises and cleans over everything it is given, so
+        # on a 30-s MIMIC-III-Ext-PPG record a NaN gap 20 s after the analysed
+        # window still poisoned the whole signal (and the normalisation
+        # statistics came from 30 s, not the 10 s the model sees). PulseDB and
+        # BUT PPG windows are exactly duration_sec long, so this is a no-op there.
+        raw = np.asarray(raw)[: int(duration_sec * fs_in)]
         sig = self.preprocess(raw, fs_in, modality)
         if self.long_input:
             seg = sig[: duration_sec * self.sampling_freq]
