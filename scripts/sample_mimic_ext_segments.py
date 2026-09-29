@@ -25,21 +25,12 @@ import numpy as np
 import pandas as pd
 import wfdb
 
-from trustbio.data.mimic_ext_ppg import DEFAULT_ROOT, build_mimic_ext_ppg_cohort, first_sqi_code
+from trustbio.data.mimic_ext_ppg import (
+    DEFAULT_ROOT, build_mimic_ext_ppg_cohort, first_sqi_code, native_stratum,
+)
 
 STRATA = ("clean", "ppg_poor", "ecg_poor")
-
-
-def _stratum(p0: float, e0: float) -> str | None:
-    if np.isnan(p0) or np.isnan(e0):
-        return None
-    if p0 == 0:
-        return "ppg_poor"
-    if p0 == 1 and e0 == 1:
-        return "clean"
-    if p0 == 1 and e0 <= 0:
-        return "ecg_poor"
-    return None
+_stratum = native_stratum
 
 
 def select_segments(meta_chunks, n_per_stratum: int, max_per_subject: int, seed: int) -> pd.DataFrame:

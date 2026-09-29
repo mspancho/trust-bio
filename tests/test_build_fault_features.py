@@ -39,6 +39,22 @@ def test_degraded_pair_reproduces_what_the_loader_fed_the_model():
     assert same_ecg is ecg and same_ppg is ppg
 
 
+def test_native_annotations_prefers_cache_csv_and_derives_codes(tmp_path):
+    from scripts.build_fault_features import native_annotations
+    visits = pd.DataFrame({"visit_id": ["a", "b"], "subject_id": [1, 2],
+                           "vector_10s_pleth_sqi": ["[1, 1, 1]", "[0, 1, 1]"],
+                           "vector_10s_ecg_sqi": ["[-3, 1, 1]", "[1, 1, 1]"]})
+    nat = native_annotations(None, "mimic_ext_ppg", visits)
+    assert nat["a"]["stratum"] == "ecg_poor" and nat["a"]["ecg_sqi0"] == -3.0
+    assert nat["b"]["stratum"] == "ppg_poor" and nat["b"]["pleth_sqi0"] == 0.0
+    pd.DataFrame({"visit_id": ["a"], "subject_id": ["s1"], "stratum": ["clean"],
+                  "pleth_sqi0": [1.0], "ecg_sqi0": [1.0]}).to_csv(tmp_path / "mimic_ext_ppg_cohort.csv", index=False)
+    nat2 = native_annotations(tmp_path, "mimic_ext_ppg", visits)
+    assert nat2["a"]["stratum"] == "clean" and nat2["a"]["subject_id"] == "s1" and "b" not in nat2
+    but = native_annotations(None, "but_ppg", pd.DataFrame({"visit_id": ["100001"], "subject_id": ["100"], "quality": [0]}))
+    assert but["100001"]["quality"] == 0
+
+
 def test_known_condition_mapping():
     assert known_condition("pulsedb_mimic", "motion_artifact", {}) == "motion_artifact"
     assert known_condition("pulsedb_mimic", None, {}) == "clean"

@@ -136,3 +136,19 @@ def first_sqi_code(sqi_str) -> float:
     at duration_sec=10 (encode_modality keeps the first duration_sec seconds)."""
     v = parse_sqi_vector(sqi_str)
     return float(v[0]) if len(v) else float("nan")
+
+
+def native_stratum(pleth_sqi0: float, ecg_sqi0: float) -> str | None:
+    """Taxonomy stratum from the first sub-window's native codes: 'clean'
+    (PLETH 1 and ECG 1), 'ppg_poor' (PLETH 0), 'ecg_poor' (PLETH 1 and ECG <= 0;
+    the negative codes are undocumented, -3 empirically marks missing samples),
+    None when either code is missing."""
+    if pleth_sqi0 is None or ecg_sqi0 is None or np.isnan(pleth_sqi0) or np.isnan(ecg_sqi0):
+        return None
+    if pleth_sqi0 == 0:
+        return "ppg_poor"
+    if pleth_sqi0 == 1 and ecg_sqi0 == 1:
+        return "clean"
+    if pleth_sqi0 == 1 and ecg_sqi0 <= 0:
+        return "ecg_poor"
+    return None

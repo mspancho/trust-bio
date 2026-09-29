@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 
 from trustbio.data.but_ppg import load_but_ppg_accelerometer
+from trustbio.data.mimic_ext_ppg import first_sqi_code, native_stratum
 from trustbio.degradation.calibrate import load_cached_noise_amplitude
 from trustbio.degradation.inject import apply_degradation, visit_rng
 from trustbio.eval.metrics import auroc
@@ -86,6 +87,31 @@ def load_condition_features(store_root, cond, dataset, model, modality, duration
     if not parts:
         raise FileNotFoundError(f"no features under {store.root} for {model}/{modality}")
     return pd.concat(parts)
+
+
+def native_annotations(cohort_cache, dataset: str, visits: pd.DataFrame) -> dict:
+    """{visit_id: {...}} of per-window native annotations: subject_id, and for
+    MIMIC-ext stratum / pleth_sqi0 / ecg_sqi0, for BUT PPG quality. Prefers
+    the taxonomy cohort CSV the samplers wrote (it carries the stratum
+    columns; a handle rebuilds its own table from the metadata subset and
+    does not), and otherwise derives the MIMIC-ext codes from the native SQI
+    vectors."""
+    df = None
+    if cohort_cache is not None:
+        p = Path(cohort_cache) / f"{dataset}_cohort.csv"
+        if p.exists():
+            df = pd.read_csv(p, dtype={"visit_id": str, "subject_id": str})
+    if df is None:
+        df = visits.copy()
+    df["visit_id"] = df["visit_id"].astype(str)
+    if dataset == "mimic_ext_ppg":
+        if "pleth_sqi0" not in df.columns and "vector_10s_pleth_sqi" in df.columns:
+            df["pleth_sqi0"] = df["vector_10s_pleth_sqi"].map(first_sqi_code)
+        if "ecg_sqi0" not in df.columns and "vector_10s_ecg_sqi" in df.columns:
+            df["ecg_sqi0"] = df["vector_10s_ecg_sqi"].map(first_sqi_code)
+        if "stratum" not in df.columns:
+            df["stratum"] = [native_stratum(p, e) for p, e in zip(df["pleth_sqi0"], df["ecg_sqi0"])]
+    return df.set_index("visit_id").to_dict("index")
 
 
 def raw_signals(handle, duration_sec: int) -> dict:
@@ -206,9 +232,10 @@ def main() -> int:
     for ds in DEGRADED_DATASETS + CLEAN_ONLY_DATASETS:
         h = build_dataset_handle(ds, args, with_labels=False)
         signals[ds] = raw_signals(h, args.duration_sec)
-        visits = h.cohort.visits.copy()
-        visits["visit_id"] = visits["visit_id"].astype(str)
-        natives[ds] = visits.set_index("visit_id").to_dict("index")
+        natives[ds] = native_annotations(getattr(args, "cohort_cache", None), ds, h.cohort.visits)
+        missing = [v for v in signals[ds] if v not in natives[ds]]
+        if missing:
+            raise RuntimeError(f"{ds}: {len(missing)} windows have no native annotation row (e.g. {missing[:3]})")
         print(f"[fault-features] {ds}: {len(signals[ds]):,} windows loaded", flush=True)
     accel["but_ppg"] = accel_traces(args.but_ppg_root, list(signals["but_ppg"]), args.duration_sec, args.window_sec)
 
