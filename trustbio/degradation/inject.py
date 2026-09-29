@@ -11,7 +11,7 @@ import hashlib
 
 import numpy as np
 
-from .calibrate import load_cached_noise_amplitude
+from .calibrate import colored_noise as _colored_noise, load_cached_noise_amplitude
 
 
 def inject_motion_artifact(
@@ -30,12 +30,10 @@ def inject_motion_artifact(
     out = sig.copy()
     burst_len = max(1, int(severity * len(sig)))
     start = int(rng.integers(0, max(1, len(sig) - burst_len + 1)))
-    raw_noise = rng.normal(0, amplitude * np.std(sig), burst_len)
     # Smooth (colored) noise better approximates real motion artifact than
-    # white noise, matching the "colored noise" framing in the study design.
-    kernel = np.ones(5) / 5
-    colored_noise = np.convolve(raw_noise, kernel, mode="same")
-    out[start:start + burst_len] += colored_noise.astype(out.dtype)
+    # white noise; the same generator is used by the calibration, so the
+    # amplitude it solved for means the same thing here.
+    out[start:start + burst_len] += _colored_noise(rng, burst_len, amplitude * np.std(sig)).astype(out.dtype)
     return out
 
 

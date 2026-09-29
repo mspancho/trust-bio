@@ -70,6 +70,8 @@ The KMeans(k=3) fit uses only rows with `known_condition ∈ {motion_artifact, l
 
 ### Task 1: Isolate the noise-calibration cache from the tests and refit it on real BUT PPG
 
+> **Revision (2026-09-28, during execution).** Step 5's refit hit the stop rule: the fit returned the floor `0.001` at every severity. Diagnosis on all 3,795 accelerometer-era recordings: accelerometer values are milli-g (mean ≈ 960, gravity), so `severity × max_accel` extrapolated below every observation; more fundamentally, accelerometer dynamics do not separate quality-0 from quality-1 (AUROC 0.57), PPG noise measures do not either (0.50–0.57), and noise vs accelerometer Spearman ≈ −0.11 — there is no relationship to calibrate against. (A second bug surfaced on the way: the HF-residual ratio's `np.convolve(mode="same")` zero-padding gave DC-sized edge residuals on camera PPG; fixed in both `calibrate.py` and `taxonomy/sqi.py`.) Decision (user-approved): anchor each severity to a QUANTILE of real BUT PPG noise instead — amplitudes at 0.1/0.3/0.6 are solved by bisection on clean PulseDB-MIMIC reference windows so the corrupted span's HF ratio equals the 50th/75th/95th-percentile real recording. `fit_motion_noise_amplitude(root, reference_ppg, ...)` now takes the reference windows; `scripts/inject_degradation.py` draws them from `features_cache/taxonomy/pulsedb_mimic_cohort.csv`; a `noise_amplitude_calibration.json` sidecar records targets/achieved ratios. The accelerometer cross-check is reported as a negative result in Methods.
+
 **Files:**
 - Modify: `tests/test_degradation_calibrate.py`
 - Run: `scripts/inject_degradation.py --refit-calibration` as a batch job
