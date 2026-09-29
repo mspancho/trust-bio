@@ -1,0 +1,9 @@
+ecg-domain pulsedb_mimic 10 cond=motion_artifact_0.1 kind=motion_artifact sev=0.1
+ecg-domain pulsedb_mimic 10 cond=motion_artifact_0.3 kind=motion_artifact sev=0.3
+ecg-domain pulsedb_mimic 10 cond=motion_artifact_0.6 kind=motion_artifact sev=0.6
+ecg-domain pulsedb_vital 10 cond=motion_artifact_0.1 kind=motion_artifact sev=0.1
+ecg-domain pulsedb_vital 10 cond=motion_artifact_0.3 kind=motion_artifact sev=0.3
+ecg-domain pulsedb_vital 10 cond=motion_artifact_0.6 kind=motion_artifact sev=0.6
+ecg-domain mimic_ext_ppg 10 cond=motion_artifact_0.1 kind=motion_artifact sev=0.1
+ecg-domain mimic_ext_ppg 10 cond=motion_artifact_0.3 kind=motion_artifact sev=0.3
+ecg-domain mimic_ext_ppg 10 cond=motion_artifact_0.6 kind=motion_artifact sev=0.6

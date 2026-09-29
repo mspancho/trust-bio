@@ -1,0 +1,4 @@
+xecg-10min pulsedb_mimic 10 cond=lead_off_0.6 kind=lead_off sev=0.6
+xecg-10min pulsedb_vital 10 cond=motion_artifact_0.1 kind=motion_artifact sev=0.1
+xecg-10min pulsedb_vital 10 cond=lead_off_0.6 kind=lead_off sev=0.6
+xecg-10min mimic_ext_ppg 10 cond=motion_artifact_0.3 kind=motion_artifact sev=0.3
