@@ -88,3 +88,11 @@ Chunked, resumable SLURM arrays; see `docs/superpowers/plans/2026-09-21-full-sca
 - Jobs: gpu=54042608 cpu=54042609 merge=54042610 (merge waits on both arrays; it REFUSES any cell with missing chunks -- redo those chunks with `sbatch --array=<idx> scripts/extract_features[_cpu].sbatch <manifest>` then rerun that merge task)
 - Labels: `scripts/build_pulsedb_labels.py --store features_cache` (jobs tb-labels-mimic 54042005 / tb-labels-vital 54042006)
 - Watch: `squeue -u $USER | grep trustbio`; `grep -h kept logs/extract_<id>_*.out`
+
+## Fault taxonomy (run 2026-09-28/29)
+
+Plan and outcome: `docs/superpowers/plans/2026-09-28-fault-taxonomy-analysis.md`. Taxonomy cohorts in `features_cache/taxonomy/` (60 subjects x <=40 windows per PulseDB institution; 800/800/800 MIMIC-ext segments stratified by native SQI; all 3,888 BUT PPG recordings), degraded feature store in `features_cache/taxonomy_store/<condition>/<dataset>/` (clean + motion_artifact/lead_off x 0.1/0.3/0.6, all 7 models, verified 0 bad across 1,386 files), results in `results/taxonomy/` (`fault_features.csv`, `table3_recall.csv`, `confusion_*.csv`, `assignments_*.csv`, `summary.json`, `config.json`, `figures/`; first-iteration results in `results/taxonomy_v1_hfecg/`).
+
+Jobs: cohorts 54696312; motion-noise calibration 54713465 (amplitudes 0.18/0.31/1.30 x signal std, anchored to the 50/75/95th percentile of real BUT PPG out-of-band noise); extraction 54697971 + 54697972 (with redo 54704998, 54707808, MIMIC-ext 54705061/54705062, motion 54713466/54713467); verification 54713468; analysis 54713469. Rerun end to end with `sbatch scripts/run_taxonomy.sbatch`.
+
+Headline: KMeans(k=3) on label-free SQI/disagreement features recovers severe faults (severity 0.6: lead-off recall 0.99, motion 1.00) and not mild/moderate ones (<= 0.02); the structural (clean cross-institution) class is not identifiable (recall 0.0; disagreement AUROC 0.62). Native-SQI validation of the traces: PPG AUROC 0.65, ECG 0.51. The BUT PPG accelerometer/quality calibration originally planned has no empirical support (AUROC 0.57, Spearman -0.11) and is reported as a negative result.
