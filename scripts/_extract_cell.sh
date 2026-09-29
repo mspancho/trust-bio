@@ -21,6 +21,20 @@ cd "${REPO_DIR}"
 # HF_HOME and the gated-model token live in .env; never echo them.
 [[ -f .env ]] && { set -a; . ./.env; set +a; }
 
+# JIT-compiled CUDA extensions (xECG's xLSTM kernels) are cached per Python/
+# CUDA version only. gpu_quad mixes L40S/A100/A40/V100 nodes, so a kernel
+# built on one architecture was loaded on another and every window died with
+# "no kernel image is available for execution on the device". Key the cache
+# by the GPU's compute capability so each architecture builds its own.
+if command -v nvidia-smi >/dev/null 2>&1; then
+  GPU_CC=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader -i 0 2>/dev/null | head -1 | tr -d '. ')
+  if [[ -n "${GPU_CC}" ]]; then
+    export TORCH_EXTENSIONS_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/torch_extensions/py311_cu121_sm${GPU_CC}"
+    mkdir -p "${TORCH_EXTENSIONS_DIR}"
+    echo "[extract] torch extensions dir: ${TORCH_EXTENSIONS_DIR}"
+  fi
+fi
+
 i="${SLURM_ARRAY_TASK_ID:-0}"
 LINE=$(sed -n "$((i+1))p" "${MANIFEST}")
 read -r MODEL DATASET DURATION REST <<<"${LINE}"

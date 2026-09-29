@@ -79,6 +79,20 @@ def test_chunked_extraction_merges_to_the_unchunked_result(tmp_path):
             np.testing.assert_allclose(X_m, X_ref)
 
 
+def test_losing_every_window_is_a_hard_failure_not_an_empty_file(tmp_path):
+    handle, _ = _deterministic_handle()
+
+    def broken_loader(visit_id, modality):
+        raise RuntimeError("CUDA extension exploded")
+
+    broken = DatasetHandle(name="toy", cohort=None, splits=handle.splits,
+                           load_signal=broken_loader, label_table={})
+    store = FeatureStore(tmp_path)
+    with pytest.raises(RuntimeError, match="every one of"):
+        _extract(broken, store)
+    assert not any(store.exists("moment-base", m, 10, "train") for m in MODALITIES)
+
+
 def test_finished_chunks_and_merged_splits_are_skipped_on_rerun(tmp_path):
     handle, calls = _deterministic_handle()
     store = FeatureStore(tmp_path)

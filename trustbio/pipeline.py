@@ -134,6 +134,14 @@ def extract_features_for_model(
         # matrix and nothing in the log to show for it. At scale nobody re-counts
         # rows by hand, so the run has to say so itself.
         n_skipped = n_requested - len(kept_ids)
+        if n_requested > 0 and not kept_ids:
+            # Losing EVERY window is a broken model or loader, not bad data;
+            # writing an empty matrix and exiting 0 hid a CUDA-extension
+            # failure until a downstream verification refused the store.
+            raise RuntimeError(
+                f"{model_name}/{dataset.name}/{store_split}: every one of "
+                f"{n_requested:,} windows failed; first error: {first_error}"
+            )
         msg = (f"[extract] {model_name}/{dataset.name}/{store_split}: "
                f"kept {len(kept_ids):,}/{n_requested:,} windows")
         if n_skipped:
