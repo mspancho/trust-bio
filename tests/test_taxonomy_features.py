@@ -51,9 +51,9 @@ def test_features_to_matrix_shape_and_names():
         extract_fault_features(np.zeros(5), None, 1, "pulsedb_vital", 70, 90, 5.0),
     ]
     X, names = features_to_matrix(feats)
-    assert X.shape == (2, 7)
+    assert X.shape == (2, 9)
     assert names == FEATURE_NAMES
-    assert np.isnan(X[:, 5]).all() and np.isnan(X[:, 6]).all()   # no per-modality traces given
+    assert np.isnan(X[:, 5:]).all()                                 # no per-modality traces given
 
 
 def test_per_modality_sqi_values_are_recorded():
@@ -63,6 +63,7 @@ def test_per_modality_sqi_values_are_recorded():
         ecg_sqi_trace=np.array([1, 0, 1, 1.0]), ppg_sqi_trace=np.array([1, 1, 1, 0.5]),
     )
     assert feats.ecg_sqi_value == 0.75 and feats.ppg_sqi_value == 0.875
+    assert feats.ecg_drop_duration == 1.0 and feats.ppg_drop_duration == 0.0
     assert feats.model_disagreement == 1.0
 
 

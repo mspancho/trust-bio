@@ -10,8 +10,9 @@ Spearman correlation is -0.11 (n = 3,795 accelerometer-era recordings); the
 fit collapsed to its floor. What BUT PPG does provide is a large sample of
 real camera-PPG noise levels, so each severity is anchored to a QUANTILE of
 that distribution: the corrupted span of an injected window is made as noisy
-(high-frequency residual ratio, trustbio.taxonomy.sqi) as the 50th / 75th /
-95th percentile real BUT PPG recording for severity 0.1 / 0.3 / 0.6. The
+(out-of-pulse-band noise ratio, trustbio.taxonomy.sqi -- band-based so the
+statistic means the same at 30 Hz and 125 Hz) as the 50th / 75th / 95th
+percentile real BUT PPG recording for severity 0.1 / 0.3 / 0.6. The
 amplitude achieving each target is solved on clean reference PPG windows
 (PulseDB) by bisection. The accelerometer cross-check is a negative result
 and is reported as such.
@@ -25,7 +26,7 @@ import numpy as np
 
 from ..config import DEGRADATION_SEVERITIES
 from ..data.but_ppg import build_but_ppg_cohort, make_but_ppg_signal_loader
-from ..taxonomy.sqi import mean_hf_ratio
+from ..taxonomy.sqi import mean_ppg_oob_ratio as _noise_ratio
 
 NOISE_AMPLITUDE_CACHE_PATH = Path(
     Path(__file__).resolve().parent.parent.parent / "features_cache" / "noise_amplitude_cache.json"
@@ -58,7 +59,7 @@ def real_noise_quantiles(root: str | Path, quantiles: dict[float, float] = SEVER
         ppg = np.asarray(ppg, dtype=float)
         if np.std(ppg) <= min_std or np.mean(np.abs(np.diff(ppg)) == 0) > 0.5:
             continue
-        ratios.append(mean_hf_ratio(ppg, fs))
+        ratios.append(_noise_ratio(ppg, fs))
     if len(ratios) < 10:
         raise ValueError(f"only {len(ratios)} usable BUT PPG recordings under {root}; need >= 10")
     r = np.asarray(ratios)
@@ -71,7 +72,7 @@ def _achieved_ratio(reference_ppg, amplitude: float, seed: int = 0) -> float:
     for sig, fs in reference_ppg:
         sig = np.asarray(sig, dtype=float)
         noisy = sig + colored_noise(rng, len(sig), amplitude * float(np.std(sig)))
-        vals.append(mean_hf_ratio(noisy, fs))
+        vals.append(_noise_ratio(noisy, fs))
     return float(np.mean(vals))
 
 

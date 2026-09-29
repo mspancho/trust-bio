@@ -13,6 +13,7 @@ def test_plots_are_written_from_small_synthetic_tables(tmp_path):
         "sqi_value": rng.random(80), "sqi_drop_duration": rng.integers(0, 10, 80), "accel_corr": 0.0,
         "source_db": "pulsedb_mimic", "model_disagreement": rng.random(80),
         "ecg_sqi_value": rng.random(80), "ppg_sqi_value": rng.random(80),
+        "ecg_drop_duration": rng.integers(0, 10, 80), "ppg_drop_duration": rng.integers(0, 10, 80),
     })
     asg = feats[["visit_id", "dataset", "condition", "severity", "known_condition"]].copy()
     asg["cluster"] = [c if c in ("motion_artifact", "lead_off", "structural") else "motion_artifact" for c in conds]

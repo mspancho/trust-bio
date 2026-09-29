@@ -16,9 +16,10 @@ structural site/device shift without any diagnostic label:
     the same data disagree sharply despite a clean SQI are the structural-
     shift signature the paper draft describes (Results: "quality indices ...
     also flag segments that are clean but out-of-distribution").
-  - ecg_sqi_value / ppg_sqi_value: mean per-modality quality. Added because
-    lead-off (flat ECG) and motion artifact (noisy PPG) share span lengths at
-    equal injected severity and differ only in WHICH channel dropped.
+  - ecg_sqi_value / ppg_sqi_value and ecg_drop_duration / ppg_drop_duration:
+    per-modality quality and longest low-quality run. Added because lead-off
+    (flat ECG) and motion artifact (noisy PPG) share span lengths at equal
+    injected severity and differ only in WHICH channel dropped.
 """
 from __future__ import annotations
 
@@ -36,10 +37,13 @@ class SegmentFaultFeatures:
     model_disagreement: float
     ecg_sqi_value: float = float("nan")
     ppg_sqi_value: float = float("nan")
+    ecg_drop_duration: float = float("nan")
+    ppg_drop_duration: float = float("nan")
 
 
 FEATURE_NAMES = ["sqi_value", "sqi_drop_duration", "accel_corr", "source_db",
-                 "model_disagreement", "ecg_sqi_value", "ppg_sqi_value"]
+                 "model_disagreement", "ecg_sqi_value", "ppg_sqi_value",
+                 "ecg_drop_duration", "ppg_drop_duration"]
 
 
 _LOW_SQI_THRESHOLD = 0.5
@@ -90,6 +94,10 @@ def extract_fault_features(
         model_disagreement=float(abs(model_a_pred - model_b_pred) / disagreement_scale),
         ecg_sqi_value=float(np.mean(ecg_sqi_trace)) if ecg_sqi_trace is not None else float("nan"),
         ppg_sqi_value=float(np.mean(ppg_sqi_trace)) if ppg_sqi_trace is not None else float("nan"),
+        ecg_drop_duration=(float(_longest_low_sqi_run(np.asarray(ecg_sqi_trace)))
+                           if ecg_sqi_trace is not None else float("nan")),
+        ppg_drop_duration=(float(_longest_low_sqi_run(np.asarray(ppg_sqi_trace)))
+                           if ppg_sqi_trace is not None else float("nan")),
     )
 
 
@@ -110,6 +118,7 @@ def features_to_matrix(
             "accel_corr": f.accel_corr, "source_db": float(source_code[f.source_db]),
             "model_disagreement": f.model_disagreement,
             "ecg_sqi_value": f.ecg_sqi_value, "ppg_sqi_value": f.ppg_sqi_value,
+            "ecg_drop_duration": f.ecg_drop_duration, "ppg_drop_duration": f.ppg_drop_duration,
         }
         rows.append([values[c] for c in names])
     return np.asarray(rows, dtype=np.float64).reshape(len(rows), len(names)), names

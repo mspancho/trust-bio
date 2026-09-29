@@ -2,41 +2,34 @@
 
 The taxonomy's transient/persistent distinction is about WHEN and for HOW
 LONG quality drops, so it needs a quality value per second, on the exact
-(possibly degraded) waveform a model was fed. Two ingredients, deliberately
-nothing more:
+(possibly degraded) waveform a model was fed. Deliberately little:
 
-  * flat-line: a sub-window whose spread is a negligible fraction of the whole
-    window's spread scores 0 -- an electrode off or zeroed span;
-  * high-frequency residual ratio: std(x - moving_average(x, 40 ms)) / std(x),
-    the same quantity degradation/calibrate.py uses to define "noise". The
-    trace is 1 - ratio / hf_ref, clipped to [0, 1]; `hf_ref` is the ratio at
-    which quality is called zero, one free scale per modality, fitted against
-    MIMIC-III-Ext-PPG's native SQI (scripts/build_fault_features.py).
+  * ECG: an electrode-off detector. A sub-window whose spread is a negligible
+    fraction of the whole window's spread scores 0, everything else 1. The
+    only ECG fault injected here (lead-off) and the only one the native
+    MIMIC-III-Ext-PPG code -3 confirms (missing samples) is a flat line, and
+    a noise-based measure gets ECG BACKWARDS -- QRS complexes are the high-
+    frequency content, so a clean ECG looks "noisy" (native AUROC 0.29 in the
+    first run of this analysis).
+  * PPG: out-of-band noise. The window is low-passed at 8 Hz (pulse content
+    and respiratory baseline lie below); per sub-window, std(residual) /
+    std(signal) is the noise ratio, and quality is 1 - ratio / ref, clipped
+    to [0, 1]. Frequency-based so it
+    means the same thing at 30 Hz (smartphone camera) and 125 Hz (monitor) --
+    a fixed-length moving-average kernel did not, and made every camera-PPG
+    recording look destroyed. `ref` is the ratio at which quality is called
+    zero: the 95th percentile of real BUT PPG per-second ratios, i.e. "as
+    noisy as the noisiest 5% of real smartphone-PPG seconds"
+    (scripts/build_fault_features.py). Flat sub-windows score 0 as well.
 """
 from __future__ import annotations
 
 import numpy as np
+from scipy.signal import butter, filtfilt
 
 FLAT_REL_STD = 1e-4
-SMOOTH_SEC = 0.04
-DEFAULT_HF_REF = 0.5
-
-
-def hf_noise_ratio(x: np.ndarray, fs: int) -> float:
-    """High-frequency residual energy as a fraction of total spread; 0 for a
-    constant signal."""
-    x = np.asarray(x, dtype=np.float64)
-    sd = float(np.std(x))
-    if sd == 0.0:
-        return 0.0
-    x = x - x.mean()
-    k = max(3, int(round(SMOOTH_SEC * fs)))
-    # Edge-pad before smoothing: np.convolve(mode="same") zero-pads, so a
-    # signal with a large DC offset (camera PPG sits at ~100-200 intensity
-    # units) gets DC-sized residuals at the edges and ratios far above 1.
-    padded = np.pad(x, (k // 2, k - 1 - k // 2), mode="edge")
-    smooth = np.convolve(padded, np.ones(k) / k, mode="valid")
-    return float(np.std(x - smooth) / sd)
+PULSE_LOWPASS_HZ = 8.0     # pulse morphology and respiratory baseline both lie below this
+DEFAULT_PPG_REF = 0.5
 
 
 def _sub_windows(x: np.ndarray, fs: int, window_sec: float) -> list[np.ndarray]:
@@ -45,24 +38,60 @@ def _sub_windows(x: np.ndarray, fs: int, window_sec: float) -> list[np.ndarray]:
     return [x[i * n:(i + 1) * n] for i in range(n_win)]
 
 
-def mean_hf_ratio(x: np.ndarray, fs: int, window_sec: float = 1.0) -> float:
-    """Mean sub-window residual ratio -- the per-segment statistic that gets
-    compared against a native quality label when calibrating hf_ref."""
+def _is_flat(w: np.ndarray, whole_sd: float) -> bool:
+    return whole_sd == 0.0 or float(np.std(w)) < FLAT_REL_STD * whole_sd
+
+
+def pulse_band_residual(x: np.ndarray, fs: int) -> tuple[np.ndarray, np.ndarray]:
+    """(in-band, residual) decomposition of a demeaned PPG window: in-band is
+    an 8-Hz zero-phase low-pass (pulse morphology and respiratory baseline),
+    the residual is everything above it. A band-pass with a 0.5-Hz high-pass
+    edge was tried first; its multi-second transient made the first and last
+    second of every clean window look noisy."""
     x = np.asarray(x, dtype=np.float64)
-    return float(np.mean([hf_noise_ratio(w, fs) for w in _sub_windows(x, fs, window_sec)]))
+    x = x - x.mean()
+    hi = min(PULSE_LOWPASS_HZ, 0.45 * fs)
+    if len(x) < 3 * 3 * 2 + 1 or hi <= 0:
+        return x, np.zeros_like(x)
+    b, a = butter(3, hi, btype="lowpass", fs=fs)
+    band = filtfilt(b, a, x, padlen=min(len(x) - 1, int(fs)))
+    return band, x - band
 
 
-def sqi_trace(x: np.ndarray, fs: int, hf_ref: float, window_sec: float = 1.0) -> np.ndarray:
-    """Quality in [0, 1] per sub-window of `window_sec` seconds."""
+def ppg_oob_ratio_trace(x: np.ndarray, fs: int, window_sec: float = 1.0) -> np.ndarray:
+    """Per sub-window out-of-pulse-band noise ratio, clipped to [0, 2]."""
+    x = np.asarray(x, dtype=np.float64)
+    band, resid = pulse_band_residual(x, fs)
+    out = []
+    for xw, rw in zip(_sub_windows(x - x.mean(), fs, window_sec), _sub_windows(resid, fs, window_sec)):
+        sd = float(np.std(xw))
+        out.append(0.0 if sd == 0.0 else float(np.clip(np.std(rw) / sd, 0.0, 2.0)))
+    return np.asarray(out, dtype=np.float64)
+
+
+def mean_ppg_oob_ratio(x: np.ndarray, fs: int, window_sec: float = 1.0) -> float:
+    """Mean per-sub-window out-of-band ratio -- the per-recording statistic
+    the motion-noise calibration matches to real smartphone PPG."""
+    return float(np.mean(ppg_oob_ratio_trace(x, fs, window_sec)))
+
+
+def ppg_sqi_trace(x: np.ndarray, fs: int, ref: float, window_sec: float = 1.0) -> np.ndarray:
+    """PPG quality in [0, 1] per sub-window: flat -> 0, else 1 - ratio / ref."""
     x = np.asarray(x, dtype=np.float64)
     whole_sd = float(np.std(x))
+    ratios = ppg_oob_ratio_trace(x, fs, window_sec)
     out = []
-    for w in _sub_windows(x, fs, window_sec):
-        if whole_sd == 0.0 or float(np.std(w)) < FLAT_REL_STD * whole_sd:
-            out.append(0.0)
-        else:
-            out.append(float(np.clip(1.0 - hf_noise_ratio(w, fs) / hf_ref, 0.0, 1.0)))
+    for w, r in zip(_sub_windows(x, fs, window_sec), ratios):
+        out.append(0.0 if _is_flat(w, whole_sd) else float(np.clip(1.0 - r / ref, 0.0, 1.0)))
     return np.asarray(out, dtype=np.float64)
+
+
+def ecg_sqi_trace(x: np.ndarray, fs: int, window_sec: float = 1.0) -> np.ndarray:
+    """ECG quality per sub-window: 0 for a flat (electrode-off / dropout)
+    sub-window, 1 otherwise."""
+    x = np.asarray(x, dtype=np.float64)
+    whole_sd = float(np.std(x))
+    return np.asarray([0.0 if _is_flat(w, whole_sd) else 1.0 for w in _sub_windows(x, fs, window_sec)])
 
 
 def combined_sqi_trace(ecg_sqi: np.ndarray, ppg_sqi: np.ndarray) -> np.ndarray:
@@ -70,16 +99,11 @@ def combined_sqi_trace(ecg_sqi: np.ndarray, ppg_sqi: np.ndarray) -> np.ndarray:
     return np.minimum(np.asarray(ecg_sqi[:n]), np.asarray(ppg_sqi[:n]))
 
 
-def calibrate_hf_ref(hf_good: np.ndarray, hf_poor: np.ndarray) -> float:
-    """Pick hf_ref so that the trace's 0.5 threshold (hf_ratio == hf_ref / 2)
-    best separates natively-good from natively-poor segments (max Youden J
-    over the pooled per-segment mean ratios)."""
-    good, poor = np.asarray(hf_good, float), np.asarray(hf_poor, float)
-    if len(good) == 0 or len(poor) == 0:
-        return DEFAULT_HF_REF
-    best_t, best_j = float(np.median(np.r_[good, poor])), -np.inf
-    for t in np.unique(np.r_[good, poor]):
-        j = float(np.mean(poor >= t) - np.mean(good >= t))
-        if j > best_j:
-            best_j, best_t = j, float(t)
-    return 2.0 * best_t
+def calibrate_ppg_ref(per_second_ratios: np.ndarray, quantile: float = 0.95) -> float:
+    """Quality-zero reference: the `quantile` of real per-second out-of-band
+    ratios (default: the noisiest 5% of real smartphone-PPG seconds)."""
+    r = np.asarray(per_second_ratios, dtype=float)
+    r = r[np.isfinite(r)]
+    if len(r) == 0:
+        return DEFAULT_PPG_REF
+    return float(max(np.quantile(r, quantile), 1e-3))

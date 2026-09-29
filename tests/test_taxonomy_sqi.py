@@ -2,43 +2,65 @@ import numpy as np
 import pytest
 
 from trustbio.taxonomy.sqi import (
-    calibrate_hf_ref, combined_sqi_trace, hf_noise_ratio, mean_hf_ratio, sqi_trace,
+    calibrate_ppg_ref, combined_sqi_trace, ecg_sqi_trace, mean_ppg_oob_ratio,
+    ppg_oob_ratio_trace, ppg_sqi_trace,
 )
 
 FS = 125
 
 
-def _clean(fs=FS, seconds=10, seed=0):
+def _ppg(fs=FS, seconds=10, seed=0):
+    """Smooth pulse-like waveform: fundamental + harmonic inside the pulse band."""
     t = np.arange(seconds * fs) / fs
     rng = np.random.default_rng(seed)
     return (np.sin(2 * np.pi * 1.2 * t) + 0.3 * np.sin(2 * np.pi * 2.4 * t)
             + 0.01 * rng.standard_normal(len(t))).astype(np.float32)
 
 
-def test_trace_has_one_value_per_second_at_any_rate():
-    assert len(sqi_trace(_clean(125), 125, hf_ref=0.5)) == 10
-    assert len(sqi_trace(_clean(30), 30, hf_ref=0.5)) == 10
-    assert len(sqi_trace(_clean(1000), 1000, hf_ref=0.5)) == 10
+def _ecg(fs=FS, seconds=10, seed=0):
+    """Spiky QRS-like train (one sharp spike every 0.8 s) on a quiet baseline."""
+    rng = np.random.default_rng(seed)
+    x = 0.01 * rng.standard_normal(seconds * fs)
+    x[:: int(0.8 * fs)] = 1.0
+    return x.astype(np.float32)
 
 
-def test_clean_signal_scores_high_everywhere():
-    s = sqi_trace(_clean(), FS, hf_ref=0.5)
-    assert s.min() > 0.7 and s.max() <= 1.0
+def test_traces_have_one_value_per_second_at_any_rate():
+    for fs in (30, 125, 1000):
+        assert len(ecg_sqi_trace(_ecg(fs), fs)) == 10
+        assert len(ppg_sqi_trace(_ppg(fs), fs, ref=0.5)) == 10
 
 
-def test_flat_span_scores_zero_exactly_where_it_is_flat():
-    x = _clean(); x[3 * FS:6 * FS] = 0.0                # lead-off seconds 3,4,5
-    s = sqi_trace(x, FS, hf_ref=0.5)
-    assert s[3:6].tolist() == [0.0, 0.0, 0.0]
-    assert (s[:3] > 0.7).all() and (s[6:] > 0.7).all()
+def test_clean_ppg_scores_high_and_the_ratio_is_rate_consistent():
+    r30, r125 = mean_ppg_oob_ratio(_ppg(30), 30), mean_ppg_oob_ratio(_ppg(125), 125)
+    assert r30 < 0.15 and r125 < 0.15 and abs(r30 - r125) < 0.1
+    assert (ppg_sqi_trace(_ppg(), FS, ref=0.5) > 0.7).all()
 
 
-def test_noisy_span_drops_only_where_noise_is():
-    x = _clean(); rng = np.random.default_rng(1)
+def test_spiky_ecg_is_not_penalised():
+    assert ecg_sqi_trace(_ecg(), FS).tolist() == [1.0] * 10
+
+
+def test_flat_ecg_span_scores_zero_exactly_where_it_is_flat():
+    x = _ecg(); x[3 * FS:6 * FS] = 0.0                  # lead-off seconds 3,4,5
+    s = ecg_sqi_trace(x, FS)
+    assert s.tolist() == [1, 1, 1, 0, 0, 0, 1, 1, 1, 1]
+
+
+def test_noisy_ppg_span_drops_only_where_noise_is():
+    x = _ppg(); rng = np.random.default_rng(1)
     x[2 * FS:5 * FS] += (0.8 * np.std(x) * rng.standard_normal(3 * FS)).astype(np.float32)
-    s = sqi_trace(x, FS, hf_ref=0.5)
+    s = ppg_sqi_trace(x, FS, ref=0.5)
     assert (s[2:5] < 0.5).all()
     assert (np.r_[s[:2], s[5:]] > 0.7).all()
+    r = ppg_oob_ratio_trace(x, FS)
+    assert r[2:5].min() > r[:2].max() and r[2:5].min() > r[5:].max()
+
+
+def test_flat_ppg_span_scores_zero():
+    x = _ppg(); x[7 * FS:9 * FS] = 0.0
+    s = ppg_sqi_trace(x, FS, ref=0.5)
+    assert s[7:9].tolist() == [0.0, 0.0] and (s[:7] > 0.7).all()
 
 
 def test_combined_is_elementwise_min():
@@ -46,26 +68,15 @@ def test_combined_is_elementwise_min():
     assert combined_sqi_trace(a, b).tolist() == [0.5, 0.2, 0.9]
 
 
-def test_calibrate_hf_ref_separates_native_good_from_poor():
-    rng = np.random.default_rng(0)
-    good, poor = rng.normal(0.10, 0.02, 300), rng.normal(0.50, 0.05, 300)
-    ref = calibrate_hf_ref(good, poor)
-    # SQI < 0.5 <=> hf_ratio > ref/2, so ref/2 must sit between the two populations
-    assert 0.15 < ref / 2 < 0.45
-    calls_poor = np.mean(poor > ref / 2); calls_good = np.mean(good > ref / 2)
-    assert calls_poor > 0.95 and calls_good < 0.05
+def test_calibrate_ppg_ref_is_the_quantile_with_floor_and_default():
+    r = np.linspace(0.0, 1.0, 1001)
+    assert abs(calibrate_ppg_ref(r, 0.95) - 0.95) < 1e-9
+    assert calibrate_ppg_ref(np.array([]), 0.95) == 0.5
+    assert calibrate_ppg_ref(np.zeros(10), 0.95) == 1e-3
+    assert np.isfinite(calibrate_ppg_ref(np.array([0.1, np.nan, 0.3]), 0.5))
 
 
-def test_hf_ratio_is_invariant_to_dc_offset_and_bounded():
-    x = _clean()
-    base = hf_noise_ratio(x, FS)
-    assert abs(hf_noise_ratio(x + 5000.0, FS) - base) < 1e-6      # camera PPG has a big DC level
-    assert base < 0.2
-    noise = np.random.default_rng(3).standard_normal(len(x)).astype(np.float32)
-    assert hf_noise_ratio(noise, FS) <= 2.0                          # MA residual can never exceed 2x
-
-
-def test_mean_hf_ratio_is_higher_for_noisier_signal():
-    x = _clean(); noisy = x + (0.5 * np.std(x) * np.random.default_rng(2).standard_normal(len(x))).astype(np.float32)
-    assert mean_hf_ratio(noisy, FS) > mean_hf_ratio(x, FS)
-    assert hf_noise_ratio(np.zeros(100), FS) == 0.0
+def test_mean_oob_ratio_increases_with_added_noise():
+    x = _ppg()
+    noisy = x + (0.5 * np.std(x) * np.random.default_rng(2).standard_normal(len(x))).astype(np.float32)
+    assert mean_ppg_oob_ratio(noisy, FS) > mean_ppg_oob_ratio(x, FS)

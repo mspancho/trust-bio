@@ -11,6 +11,8 @@ def _table(n=40, seed=0):
     rows = []
 
     def add(cond, dataset, n, sqi, drop, esqi, psqi, dis, severity=np.nan):
+        ecg_drop = drop if cond == "lead_off" else 0.0
+        ppg_drop = drop if cond in ("motion_artifact", "real_motion") else 0.0
         for i in range(n):
             rows.append(dict(dataset=dataset, visit_id=f"{dataset}_{cond}_{i}", subject_id=f"s{i % 7}",
                              condition=cond, kind=cond if cond in ("motion_artifact", "lead_off") else "",
@@ -18,6 +20,7 @@ def _table(n=40, seed=0):
                              sqi_value=sqi + rng.normal(0, 0.02), sqi_drop_duration=drop + rng.normal(0, 0.2),
                              accel_corr=0.0, source_db=dataset, model_disagreement=dis + rng.normal(0, 0.1),
                              ecg_sqi_value=esqi + rng.normal(0, 0.02), ppg_sqi_value=psqi + rng.normal(0, 0.02),
+                             ecg_drop_duration=ecg_drop + rng.normal(0, 0.2), ppg_drop_duration=ppg_drop + rng.normal(0, 0.2),
                              pred_a=70.0, pred_b=70.0 + dis, disagreement_raw=dis))
 
     add("motion_artifact", "pulsedb_mimic", n, 0.7, 3, 0.95, 0.5, 0.2, severity=0.3)

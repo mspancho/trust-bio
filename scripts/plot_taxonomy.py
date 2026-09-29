@@ -25,7 +25,8 @@ COLUMN_SETS = {
     "all": list(FEATURE_NAMES),
     "no_source_db": [f for f in FEATURE_NAMES if f != "source_db"],
     "no_disagreement": [f for f in FEATURE_NAMES if f != "model_disagreement"],
-    "sqi_only": ["sqi_value", "sqi_drop_duration", "ecg_sqi_value", "ppg_sqi_value"],
+    "sqi_only": ["sqi_value", "sqi_drop_duration", "ecg_sqi_value", "ppg_sqi_value",
+                 "ecg_drop_duration", "ppg_drop_duration"],
 }
 
 

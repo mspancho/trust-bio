@@ -31,7 +31,9 @@ from trustbio.eval.metrics import auroc
 from trustbio.store import FeatureStore
 from trustbio.taxonomy.disagreement import disagreement_scale, fit_hr_probe, predict_hr
 from trustbio.taxonomy.features import SegmentFaultFeatures, extract_fault_features, features_to_matrix
-from trustbio.taxonomy.sqi import DEFAULT_HF_REF, calibrate_hf_ref, combined_sqi_trace, mean_hf_ratio, sqi_trace
+from trustbio.taxonomy.sqi import (
+    calibrate_ppg_ref, combined_sqi_trace, ecg_sqi_trace, ppg_oob_ratio_trace, ppg_sqi_trace,
+)
 
 if __package__:
     from ._dataset_builders import add_dataset_root_args, build_dataset_handle
@@ -152,8 +154,8 @@ def window_rows(signals, cond, kind, sev, dataset, feats_a, feats_b, probe_a, pr
     for vid, a, b in zip(ids, pa, pb):
         ecg, efs, ppg, pfs = signals[vid]
         ecg_d, ppg_d = degraded_pair(ecg, efs, ppg, pfs, vid, kind, sev, seed, amps)
-        e_sqi = sqi_trace(ecg_d, efs, hf_ref_ecg, window_sec)
-        p_sqi = sqi_trace(ppg_d, pfs, hf_ref_ppg, window_sec)
+        e_sqi = ecg_sqi_trace(ecg_d, efs, window_sec)                # hf_ref_ecg unused: flat-line detector
+        p_sqi = ppg_sqi_trace(ppg_d, pfs, hf_ref_ppg, window_sec)
         comb = combined_sqi_trace(e_sqi, p_sqi)
         acc = accel.get(vid) if accel else None
         acc = acc[: len(comb)] if acc is not None and len(acc) >= len(comb) else None
@@ -166,34 +168,44 @@ def window_rows(signals, cond, kind, sev, dataset, feats_a, feats_b, probe_a, pr
                    known_condition=known_condition(dataset, kind, nat),
                    pred_a=float(a), pred_b=float(b), disagreement_raw=abs(float(a) - float(b)),
                    sqi_value=f.sqi_value, sqi_drop_duration=f.sqi_drop_duration, accel_corr=f.accel_corr,
-                   source_db=f.source_db, ecg_sqi_value=f.ecg_sqi_value, ppg_sqi_value=f.ppg_sqi_value)
+                   source_db=f.source_db, ecg_sqi_value=f.ecg_sqi_value, ppg_sqi_value=f.ppg_sqi_value,
+                   ecg_drop_duration=f.ecg_drop_duration, ppg_drop_duration=f.ppg_drop_duration)
         row.update({k: nat.get(k) for k in NATIVE_COLUMNS})
         rows.append(row)
     return rows
 
 
-def _calibrate_refs(signals, native):
-    """hf_ref per modality from MIMIC-ext's native first-sub-window codes."""
-    ppg_good, ppg_poor, ecg_good, ecg_poor = [], [], [], []
+def ppg_reference_from_real(signals_but_ppg, window_sec: float, quantile: float = 0.95) -> tuple[float, int]:
+    """Quality-zero PPG reference from real smartphone PPG: the `quantile` of
+    per-second out-of-band ratios over every BUT PPG recording. Nothing is
+    fitted against a quality label here."""
+    ratios = []
+    for _vid, (_ecg, _efs, ppg, pfs) in signals_but_ppg.items():
+        if np.std(ppg) > 0:
+            ratios.append(ppg_oob_ratio_trace(ppg, pfs, window_sec))
+    r = np.concatenate(ratios) if ratios else np.array([])
+    return calibrate_ppg_ref(r, quantile), int(len(r))
+
+
+def native_sqi_validation(signals, native, ref_ppg: float, window_sec: float) -> dict:
+    """Pure check, never a fit: AUROC of our per-window mean quality (as a
+    score for 'poor') against MIMIC-ext's native first-sub-window codes."""
+    out = {}
+    ppg_y, ppg_s, ecg_y, ecg_s = [], [], [], []
     for vid, (ecg, efs, ppg, pfs) in signals.items():
         nat = native.get(vid, {})
         p0, e0 = nat.get("pleth_sqi0"), nat.get("ecg_sqi0")
         if p0 is not None and not pd.isna(p0):
-            (ppg_good if p0 == 1 else ppg_poor).append(mean_hf_ratio(ppg, pfs))
-        if e0 is not None and not pd.isna(e0) and (p0 == 1):
-            (ecg_good if e0 == 1 else ecg_poor).append(mean_hf_ratio(ecg, efs))
-
-    def one(good, poor, name):
-        if len(good) < 20 or len(poor) < 20:
-            print(f"[fault-features] WARNING: too few native {name} labels ({len(good)}/{len(poor)}); hf_ref={DEFAULT_HF_REF}")
-            return DEFAULT_HF_REF, float("nan")
-        y = np.r_[np.zeros(len(good)), np.ones(len(poor))]
-        s = np.r_[good, poor]
-        return calibrate_hf_ref(np.asarray(good), np.asarray(poor)), float(auroc(y, s))
-
-    ref_ppg, auc_ppg = one(ppg_good, ppg_poor, "PLETH")
-    ref_ecg, auc_ecg = one(ecg_good, ecg_poor, "ECG")
-    return ref_ecg, ref_ppg, auc_ecg, auc_ppg
+            ppg_y.append(0.0 if p0 == 1 else 1.0)
+            ppg_s.append(1.0 - float(np.mean(ppg_sqi_trace(ppg, pfs, ref_ppg, window_sec))))
+        if e0 is not None and not pd.isna(e0) and p0 == 1:
+            ecg_y.append(0.0 if e0 == 1 else 1.0)
+            ecg_s.append(1.0 - float(np.mean(ecg_sqi_trace(ecg, efs, window_sec))))
+    for name, y, s in (("ppg", ppg_y, ppg_s), ("ecg", ecg_y, ecg_s)):
+        y, s = np.asarray(y), np.asarray(s)
+        out[f"sqi_auroc_{name}"] = float(auroc(y, s)) if len(y) >= 20 and len(set(y.tolist())) == 2 else float("nan")
+        out[f"n_native_{name}"] = int(len(y))
+    return out
 
 
 def main() -> int:
@@ -239,9 +251,15 @@ def main() -> int:
         print(f"[fault-features] {ds}: {len(signals[ds]):,} windows loaded", flush=True)
     accel["but_ppg"] = accel_traces(args.but_ppg_root, list(signals["but_ppg"]), args.duration_sec, args.window_sec)
 
-    # 3. hf_ref per modality from MIMIC-ext native SQI.
-    ref_ecg, ref_ppg, auc_ecg, auc_ppg = _calibrate_refs(signals["mimic_ext_ppg"], natives["mimic_ext_ppg"])
-    print(f"[fault-features] hf_ref ecg={ref_ecg:.3f} (AUROC vs native {auc_ecg:.3f}) ppg={ref_ppg:.3f} (AUROC {auc_ppg:.3f})", flush=True)
+    # 3. PPG quality-zero reference from real smartphone PPG; native SQI is a
+    #    validation target only.
+    ref_ppg, n_ref_seconds = ppg_reference_from_real(signals["but_ppg"], args.window_sec)
+    ref_ecg = float("nan")
+    validation = native_sqi_validation(signals["mimic_ext_ppg"], natives["mimic_ext_ppg"], ref_ppg, args.window_sec)
+    auc_ppg, auc_ecg = validation["sqi_auroc_ppg"], validation["sqi_auroc_ecg"]
+    print(f"[fault-features] ppg_ref={ref_ppg:.4f} from {n_ref_seconds:,} real smartphone-PPG seconds; "
+          f"native-SQI validation AUROC ppg={auc_ppg:.3f} (n={validation['n_native_ppg']}) "
+          f"ecg={auc_ecg:.3f} (n={validation['n_native_ecg']})", flush=True)
 
     # 4. Rows for every (condition, dataset).
     rows = []
@@ -263,12 +281,15 @@ def main() -> int:
 
     fit = table[table.known_condition.isin(FIT_CONDITIONS)].reset_index(drop=True)
     feats = [SegmentFaultFeatures(r.sqi_value, r.sqi_drop_duration, r.accel_corr, r.source_db,
-                                  r.model_disagreement, r.ecg_sqi_value, r.ppg_sqi_value) for r in fit.itertuples()]
+                                  r.model_disagreement, r.ecg_sqi_value, r.ppg_sqi_value,
+                                  r.ecg_drop_duration, r.ppg_drop_duration) for r in fit.itertuples()]
     X, names = features_to_matrix(feats)
     np.savez(args.out_dir / "fault_features.npz", X=X, known_conditions=fit["known_condition"].to_numpy(str),
              feature_names=np.asarray(names), visit_id=fit["visit_id"].to_numpy(str),
              dataset=fit["dataset"].to_numpy(str), subject_id=fit["subject_id"].astype(str).to_numpy())
-    config = dict(hf_ref_ecg=ref_ecg, hf_ref_ppg=ref_ppg, sqi_auroc_ecg=auc_ecg, sqi_auroc_ppg=auc_ppg,
+    config = dict(ppg_ref=ref_ppg, ppg_ref_n_real_seconds=n_ref_seconds, ecg_sqi="flat-line detector",
+                  sqi_auroc_ecg=auc_ecg, sqi_auroc_ppg=auc_ppg,
+                  n_native_ppg=validation["n_native_ppg"], n_native_ecg=validation["n_native_ecg"],
                   disagreement_scale=scale, domain_model=args.domain_model, ts_model=args.ts_model,
                   modality=args.modality, seed=args.seed, window_sec=args.window_sec,
                   probe_alpha={k: v.alpha for k, v in probes.items()}, probe_n_train={k: v.n_train for k, v in probes.items()},

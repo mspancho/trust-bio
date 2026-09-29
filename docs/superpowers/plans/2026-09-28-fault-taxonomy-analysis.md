@@ -981,6 +981,8 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ---
 ### Task 7: Per-second signal-quality traces (`trustbio/taxonomy/sqi.py`)
 
+> **Revision (2026-09-29, after the first full analysis run; results kept in `results/taxonomy_v1_hfecg/`).** The run completed but its SQI validity check failed: ECG AUROC 0.29 vs native (inverted) and PPG 0.62 with `hf_ref_ppg` collapsing to 0.045. Two definitional errors: (1) a high-frequency residual is the wrong quality measure for ECG — QRS complexes ARE the HF content, so clean ECG scored as noisy; the ECG trace is now a pure flat-line (electrode-off/dropout) detector, which is the only ECG fault injected and the only one the native code −3 confirms. (2) The 40-ms moving-average residual is a 3-sample kernel at 30 Hz and 5 at 125 Hz, so BUT PPG's "real noise" quantiles were not comparable with PulseDB windows (every camera-PPG recording scored ≈0 and landed in the motion cluster); the PPG statistic is now the out-of-pulse-band (0.5–8 Hz) residual ratio, rate-independent, used for BOTH the SQI trace and the injection calibration (which is refit). The PPG quality-zero reference is no longer fitted to the native label (Youden on a weak label overfit): it is the 95th percentile of real BUT PPG per-second ratios, and native SQI is reported as a validation AUROC only. Per-modality drop durations (`ecg_drop_duration`, `ppg_drop_duration`) join the feature set. Motion-artifact cells are re-extracted with the refit amplitudes.
+
 **Files:**
 - Create: `trustbio/taxonomy/sqi.py`
 - Test: `tests/test_taxonomy_sqi.py` (create)
