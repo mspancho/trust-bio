@@ -56,6 +56,15 @@ def test_calibrate_hf_ref_separates_native_good_from_poor():
     assert calls_poor > 0.95 and calls_good < 0.05
 
 
+def test_hf_ratio_is_invariant_to_dc_offset_and_bounded():
+    x = _clean()
+    base = hf_noise_ratio(x, FS)
+    assert abs(hf_noise_ratio(x + 5000.0, FS) - base) < 1e-6      # camera PPG has a big DC level
+    assert base < 0.2
+    noise = np.random.default_rng(3).standard_normal(len(x)).astype(np.float32)
+    assert hf_noise_ratio(noise, FS) <= 2.0                          # MA residual can never exceed 2x
+
+
 def test_mean_hf_ratio_is_higher_for_noisier_signal():
     x = _clean(); noisy = x + (0.5 * np.std(x) * np.random.default_rng(2).standard_normal(len(x))).astype(np.float32)
     assert mean_hf_ratio(noisy, FS) > mean_hf_ratio(x, FS)

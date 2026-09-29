@@ -29,8 +29,13 @@ def hf_noise_ratio(x: np.ndarray, fs: int) -> float:
     sd = float(np.std(x))
     if sd == 0.0:
         return 0.0
+    x = x - x.mean()
     k = max(3, int(round(SMOOTH_SEC * fs)))
-    smooth = np.convolve(x, np.ones(k) / k, mode="same")
+    # Edge-pad before smoothing: np.convolve(mode="same") zero-pads, so a
+    # signal with a large DC offset (camera PPG sits at ~100-200 intensity
+    # units) gets DC-sized residuals at the edges and ratios far above 1.
+    padded = np.pad(x, (k // 2, k - 1 - k // 2), mode="edge")
+    smooth = np.convolve(padded, np.ones(k) / k, mode="valid")
     return float(np.std(x - smooth) / sd)
 
 

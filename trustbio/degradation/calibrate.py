@@ -37,9 +37,15 @@ def _accel_magnitude(acc: np.ndarray) -> float:
 
 def _ppg_noise_ratio(ppg: np.ndarray) -> float:
     """Empirical noise-to-signal proxy: high-frequency energy fraction, used
-    as the quantity motion artifact is expected to inflate."""
-    detrended = ppg - np.convolve(ppg, np.ones(5) / 5, mode="same")
-    return float(np.std(detrended) / (np.std(ppg) + 1e-8))
+    as the quantity motion artifact is expected to inflate. Demeaned and
+    edge-padded: np.convolve(mode="same") zero-pads, which on a signal with a
+    large DC offset (camera PPG) produced DC-sized edge residuals and ratios
+    in the millions."""
+    x = np.asarray(ppg, dtype=np.float64)
+    x = x - x.mean()
+    padded = np.pad(x, (2, 2), mode="edge")
+    detrended = x - np.convolve(padded, np.ones(5) / 5, mode="valid")
+    return float(np.std(detrended) / (np.std(x) + 1e-8))
 
 
 def fit_motion_noise_amplitude(

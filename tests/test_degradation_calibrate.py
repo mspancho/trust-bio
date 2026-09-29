@@ -85,6 +85,14 @@ def test_fit_writes_cache_file(fake_but_ppg_with_accel, tmp_path, monkeypatch):
     assert set(float(k) for k in cached.keys()) == set(DEGRADATION_SEVERITIES)
 
 
+def test_ppg_noise_ratio_ignores_dc_offset():
+    from trustbio.degradation.calibrate import _ppg_noise_ratio
+    t = np.arange(300) / 30.0
+    x = np.sin(2 * np.pi * 1.5 * t) + 0.05 * np.random.default_rng(0).standard_normal(300)
+    assert abs(_ppg_noise_ratio(x + 150.0) - _ppg_noise_ratio(x)) < 1e-6
+    assert _ppg_noise_ratio(x) < 0.5
+
+
 def test_fit_never_writes_the_production_cache(fake_but_ppg_with_accel, tmp_path):
     from trustbio.degradation import calibrate
     fit_motion_noise_amplitude(fake_but_ppg_with_accel)          # default cache=True
