@@ -171,7 +171,7 @@ def plot_harm_coverage(cov: pd.DataFrame, task: str, path: Path) -> None:
     agg = (c.groupby(["kind", "severity", "modality", "rule"])
            [["harm_share_caught", "material_recall", "material_rate", "mean_harm"]].mean().reset_index())
     cells = sorted({(k, s, m) for k, s, m in zip(agg["kind"], agg["severity"], agg["modality"])})
-    fig, ax = plt.subplots(figsize=(max(6, 0.9 * len(cells)), 3.2))
+    fig, ax = plt.subplots(figsize=(max(6, 1.25 * len(cells)), 3.6))
     width = 0.8 / len(RULES)
     for r_i, rule in enumerate(RULES):
         vals = [agg[(agg.kind == k) & (agg.severity == s) & (agg.modality == m) & (agg.rule == rule)]

@@ -53,7 +53,7 @@
 - Consumes: `FeatureStore.load/exists` (`trustbio/store.py`), `_fit_one`, `_predict` (`trustbio/eval/probe.py`), `_select_hp_on_source_val` (`trustbio/eval/transport.py`).
 - Produces: `parse_condition(name) -> (kind: str, severity: float)`; `subject_of(visit_id) -> str`; `load_pulsedb_labels(label_cache, source) -> DataFrame[hr_regression, sbp_regression, dbp_regression] indexed by visit_id`; `load_source(full_store, source, model, modality, duration_sec, labels, exclude_subjects=(), max_rows=None, seed=0) -> {"train": {"ids","X","y","n_excluded"}, "val": {...}}`; `fit_probes(src, tasks=PULSEDB_TASKS, seed=0) -> (dict[task, Ridge], alpha)`; `load_cell(cell_root, model, modality, duration_sec) -> (ids, X)`; `predict_frame(probes, ids, X, labels, tasks, target, condition) -> DataFrame[target, condition, kind, severity, visit_id, task, y_true, y_pred]`; `predict_cells(probes, taxonomy_store, target, model, modality, duration_sec, labels, tasks) -> DataFrame`; constants `PULSEDB_TASKS`, `MIMIC_EXT_TASKS`, `TARGET_TASKS`, `FUSION`, `MISSING_PPG`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_eval_stress.py
@@ -169,12 +169,12 @@ def test_predict_cli_end_to_end(synthetic):
     assert alphas["ecg/mimic"]["n_train"] == 450 and alphas["ecg/mimic"]["n_excluded_train"] == 50
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `conda run --no-capture-output -n trust-bio python -m pytest tests/test_eval_stress.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'trustbio.eval.stress'`.
 
-- [ ] **Step 3: Create `trustbio/eval/stress.py`**
+- [x] **Step 3: Create `trustbio/eval/stress.py`**
 
 ```python
 """Degradation stress test (paper Results §2): does a fault change what a
@@ -325,7 +325,7 @@ def predict_cells(probes: dict, taxonomy_store: str | Path, target: str, model: 
     return pd.concat(frames, ignore_index=True)
 ```
 
-- [ ] **Step 4: Create `scripts/run_stress_predict.py`** (the CLI the third test drives)
+- [x] **Step 4: Create `scripts/run_stress_predict.py`** (the CLI the third test drives)
 
 ```python
 #!/usr/bin/env python
@@ -437,9 +437,9 @@ if __name__ == "__main__":
     sys.exit(main())
 ```
 
-- [ ] **Step 5: Run the tests** — `conda run --no-capture-output -n trust-bio python -m pytest tests/test_eval_stress.py -q` → `3 passed`.
+- [x] **Step 5: Run the tests** — `conda run --no-capture-output -n trust-bio python -m pytest tests/test_eval_stress.py -q` → `3 passed`.
 
-- [ ] **Step 6: Commit** — `git add trustbio/eval/stress.py scripts/run_stress_predict.py tests/test_eval_stress.py && git commit -m "feat: degradation stress test, probe prediction pass (plan Task 1)"`.
+- [x] **Step 6: Commit** — `git add trustbio/eval/stress.py scripts/run_stress_predict.py tests/test_eval_stress.py && git commit -m "feat: degradation stress test, probe prediction pass (plan Task 1)"`.
 
 ### Task 2: Launch the prediction array
 
@@ -450,7 +450,7 @@ if __name__ == "__main__":
 - Consumes: `scripts/run_stress_predict.py` CLI (Task 1); `scripts/run_stress_analysis.py` CLI (Task 4, may not exist yet when the array is launched: the analysis job is submitted only after Task 4).
 - Produces: `results/stress/predictions_<model>.csv.gz` × 7, `results/stress/alphas_<model>.json` × 7, logs `logs/stress_<array>_<task>.out`.
 
-- [ ] **Step 1: Write `scripts/run_stress.sbatch`**
+- [x] **Step 1: Write `scripts/run_stress.sbatch`**
 
 ```bash
 #!/usr/bin/env bash
@@ -482,7 +482,7 @@ conda run --no-capture-output -n "${ENV_NAME}" python scripts/run_stress_predict
   --model "${MODEL}" --out-dir "${OUT}"
 ```
 
-- [ ] **Step 2: Write `scripts/run_stress_analysis.sbatch`**
+- [x] **Step 2: Write `scripts/run_stress_analysis.sbatch`**
 
 ```bash
 #!/usr/bin/env bash
@@ -507,9 +507,9 @@ conda run --no-capture-output -n "${ENV_NAME}" python scripts/run_stress_analysi
   --pred-dir "${OUT}" --fault-features results/taxonomy/fault_features.csv --out-dir "${OUT}"
 ```
 
-- [ ] **Step 3: Submit the array** — `sbatch scripts/run_stress.sbatch` (from the repo root). Record the job id. Watch `logs/stress_<id>_6.out` (ecg-domain, 54-d, finishes first) for the `[stress] ... probes on N rows` lines; each task should print 6 of them then `wrote ... rows`.
+- [x] **Step 3: Submit the array** — `sbatch scripts/run_stress.sbatch` (from the repo root). Record the job id. Watch `logs/stress_<id>_6.out` (ecg-domain, 54-d, finishes first) for the `[stress] ... probes on N rows` lines; each task should print 6 of them then `wrote ... rows`.
 
-- [ ] **Step 4: Commit** — `git add scripts/run_stress.sbatch scripts/run_stress_analysis.sbatch && git commit -m "chore: stress-test sbatch array and analysis job (plan Task 2)"`.
+- [x] **Step 4: Commit** — `git add scripts/run_stress.sbatch scripts/run_stress_analysis.sbatch && git commit -m "chore: stress-test sbatch array and analysis job (plan Task 2)"`.
 
 ### Task 3: Analysis tables (`trustbio/eval/stress_analysis.py`)
 
@@ -521,7 +521,7 @@ conda run --no-capture-output -n "${ENV_NAME}" python scripts/run_stress_analysi
 - Consumes: the long prediction frame from Task 1 (`model, modality, source, target, condition, kind, severity, visit_id, task, y_true, y_pred`) and a detection-flag frame (`dataset, condition, visit_id, det_drop, det_outlier, det_supervised`) built by Task 4.
 - Produces: `pearson_r(y, p) -> float`; `score_table(pred) -> DataFrame[KEYS + COND + n, r, mae, r_clean, mae_clean, delta_r, delta_mae]`; `paired_harm(pred) -> DataFrame[KEYS + COND + visit_id, y_true, harm]`; `rank_stability(scores, metric="r") -> DataFrame[modality, source, target, task, condition, kind, severity, n_models, spearman, top_clean, top_degraded]`; `gap_table(scores, domain, ts, metric="r") -> DataFrame[..., r_domain, r_ts, gap, gap_clean]`; `fusion_table(scores, metric="r") -> DataFrame[model, source, target, task, condition, kind, severity, r_fusion, best_unimodal, r_best_unimodal, fusion_minus_best]`; `harm_coverage(harm, flags, rules=("drop","outlier","supervised"), material=MATERIAL_HARM) -> DataFrame[KEYS + COND + rule, n, detection_rate, mean_harm, mean_harm_undetected, harm_share_caught, material_rate, material_recall]`; constants `KEYS`, `COND`, `CLEAN`, `MATERIAL_HARM`, `AFFECTED`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_stress_analysis.py
@@ -608,9 +608,9 @@ def test_harm_coverage_math():
     assert ("A", "ecg", "motion_artifact_0.3", "drop") not in cov.index     # no flags for that condition -> not joined
 ```
 
-- [ ] **Step 2: Run to verify it fails** — `ModuleNotFoundError: trustbio.eval.stress_analysis`.
+- [x] **Step 2: Run to verify it fails** — `ModuleNotFoundError: trustbio.eval.stress_analysis`.
 
-- [ ] **Step 3: Create `trustbio/eval/stress_analysis.py`**
+- [x] **Step 3: Create `trustbio/eval/stress_analysis.py`**
 
 ```python
 """Tables for the degradation stress test (paper Results §2), computed from
@@ -739,9 +739,9 @@ def harm_coverage(harm: pd.DataFrame, flags: pd.DataFrame, rules=("drop", "outli
     return pd.DataFrame(rows)
 ```
 
-- [ ] **Step 4: Run the tests** — `conda run --no-capture-output -n trust-bio python -m pytest tests/test_stress_analysis.py -q` → `4 passed`.
+- [x] **Step 4: Run the tests** — `conda run --no-capture-output -n trust-bio python -m pytest tests/test_stress_analysis.py -q` → `4 passed`.
 
-- [ ] **Step 5: Commit** — `git add trustbio/eval/stress_analysis.py tests/test_stress_analysis.py && git commit -m "feat: stress-test analysis tables (plan Task 3)"`.
+- [x] **Step 5: Commit** — `git add trustbio/eval/stress_analysis.py tests/test_stress_analysis.py && git commit -m "feat: stress-test analysis tables (plan Task 3)"`.
 
 ### Task 4: Analysis CLI with detection flags and figures (`scripts/run_stress_analysis.py`)
 
@@ -754,7 +754,7 @@ def harm_coverage(harm: pd.DataFrame, flags: pd.DataFrame, rules=("drop", "outli
 - Produces (in `--out-dir`): `stress_scores.csv`, `stress_rank_stability.csv`, `stress_gap.csv`, `stress_fusion.csv`, `stress_harm_coverage.csv`, `stress_detection_flags.csv`, `stress_summary.json` (`n_predictions`, `models`, `fidelity_vs_transport` = per model/modality abs diff of clean cross-source HR r vs `results/full_transport.csv` when present, `headline` = mean over models of delta_r / harm_share_caught for the affected modality per kind × severity), `figures/fig2a_severity_curves_<task>.png`, `fig2b_gap_<task>.png`, `fig2c_fusion_<task>.png`, `fig2d_harm_coverage_<task>.png` for each task present.
 - Functions: `supervised_flags(table, seed=0) -> np.ndarray[bool]`; `detection_flags(table, seed=0) -> DataFrame[dataset, condition, visit_id, known_condition, det_drop, det_outlier, det_supervised]`; `load_predictions(pred_dir) -> DataFrame`; `main(argv) -> int`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_run_stress_analysis.py
@@ -810,9 +810,9 @@ def test_analysis_cli_end_to_end(tmp_path):
     assert {"det_drop", "det_outlier", "det_supervised"} <= set(flags.columns)
 ```
 
-- [ ] **Step 2: Run to verify it fails** — `ModuleNotFoundError: scripts.run_stress_analysis`.
+- [x] **Step 2: Run to verify it fails** — `ModuleNotFoundError: scripts.run_stress_analysis`.
 
-- [ ] **Step 3: Create `scripts/run_stress_analysis.py`**
+- [x] **Step 3: Create `scripts/run_stress_analysis.py`**
 
 ```python
 #!/usr/bin/env python
@@ -1085,21 +1085,29 @@ if __name__ == "__main__":
     sys.exit(main())
 ```
 
-- [ ] **Step 4: Run the tests** — `conda run --no-capture-output -n trust-bio python -m pytest tests/test_run_stress_analysis.py tests/test_stress_analysis.py -q` → `5 passed`.
+- [x] **Step 4: Run the tests** — `conda run --no-capture-output -n trust-bio python -m pytest tests/test_run_stress_analysis.py tests/test_stress_analysis.py -q` → `5 passed`.
 
-- [ ] **Step 5: Submit the analysis job once the array finishes** — `sbatch --dependency=afterok:<array id> scripts/run_stress_analysis.sbatch` (spelled-out id; submit in a command of its own).
+- [x] **Step 5: Submit the analysis job once the array finishes** — `sbatch --dependency=afterok:<array id> scripts/run_stress_analysis.sbatch` (spelled-out id; submit in a command of its own).
 
-- [ ] **Step 6: Commit** — `git add scripts/run_stress_analysis.py tests/test_run_stress_analysis.py && git commit -m "feat: stress-test analysis CLI with detection coverage and figures (plan Task 4)"`.
+- [x] **Step 6: Commit** — `git add scripts/run_stress_analysis.py tests/test_run_stress_analysis.py && git commit -m "feat: stress-test analysis CLI with detection coverage and figures (plan Task 4)"`.
 
 ### Task 5: Read the results, record, commit
 
 **Files:**
 - Modify: `README.md` (new section after the taxonomy sections), this plan (Outcome section below), memory file `trustbio-taxonomy-findings.md` (or a new `trustbio-stress-findings.md`).
 
-- [ ] **Step 1: Verify the array** — every `logs/stress_<id>_<k>.out` ends with `wrote ... rows`; `sacct -j <id> --format=JobID,Elapsed,MaxRSS,State` shows 7 COMPLETED; `ls results/stress/predictions_*.csv.gz | wc -l` = 7.
-- [ ] **Step 2: Read** `stress_summary.json` (fidelity: clean cross-source HR r within ~0.05 of `full_transport.csv`; headline delta_r and coverage per kind × severity), `stress_scores.csv` (r by severity for the affected modalities, within vs cross), `stress_rank_stability.csv` (does the seven-model ranking hold?), `stress_gap.csv`, `stress_fusion.csv`, `stress_harm_coverage.csv` (drop / outlier / supervised coverage of harm at severity 0.3 for motion on PPG/fusion; this is the sentence the user asked for), and the four figures.
-- [ ] **Step 3: Record** a README section "Degradation stress test (plan 2026-09-29, Results §2)" with job ids and the numbers, the plan's Outcome section, and memory.
-- [ ] **Step 4: Commit** — `git add README.md docs/superpowers/plans/2026-09-29-degradation-stress-test.md && git commit -m "docs: degradation stress test outcome (Results §2)"` and push `main`.
+- [x] **Step 1: Verify the array** — every `logs/stress_<id>_<k>.out` ends with `wrote ... rows`; `sacct -j <id> --format=JobID,Elapsed,MaxRSS,State` shows 7 COMPLETED; `ls results/stress/predictions_*.csv.gz | wc -l` = 7.
+- [x] **Step 2: Read** `stress_summary.json` (fidelity: clean cross-source HR r within ~0.05 of `full_transport.csv`; headline delta_r and coverage per kind × severity), `stress_scores.csv` (r by severity for the affected modalities, within vs cross), `stress_rank_stability.csv` (does the seven-model ranking hold?), `stress_gap.csv`, `stress_fusion.csv`, `stress_harm_coverage.csv` (drop / outlier / supervised coverage of harm at severity 0.3 for motion on PPG/fusion; this is the sentence the user asked for), and the four figures.
+- [x] **Step 3: Record** a README section "Degradation stress test (plan 2026-09-29, Results §2)" with job ids and the numbers, the plan's Outcome section, and memory.
+- [x] **Step 4: Commit** — `git add README.md docs/superpowers/plans/2026-09-29-degradation-stress-test.md && git commit -m "docs: degradation stress test outcome (Results §2)"` and push `main`.
+
+## Outcome (2026-09-29, after Task 5)
+
+Executed end to end: array 54724220 (7 tasks, 10 min to 2.5 h each, all COMPLETED at 64 GB), analysis job 54724562; outputs in `results/stress/`. Fidelity to the transport run: clean cross-source HR r within 0.045 on average (max 0.10, r 0.97 over 42 cells). Test-time synthetic-data revisions: the three synthetic models' quality gaps were widened (noise 1/10/25) so a fault cannot reorder them, and the harm-share equality uses a float tolerance.
+
+**Result.** Motion artifact (PPG only) is harmless at severity 0.1 and 0.3 (PPG-probe HR delta r 0.000 / +0.003; 0.1% / 2.7% of windows moved > 5 bpm) and harmful only at 0.6 (delta r -0.044, +6.8 bpm, 58% of windows), where the `drop` rule flags every window and catches all of the harm -- so for motion, the label-free SQI already covers the harmful regime and the taxonomy's "moderate motion is invisible" limitation costs nothing. Lead-off (ECG only) is harmful from the mildest level (1-s flat-line: 26% of windows > 5 bpm, delta r -0.032; 3 s: 48%, -0.091; 6 s: 64%, -0.283); 0.3 and 0.6 are flagged 100%, but 0.1 is flagged by only 1.8% / 13% / 14% (`drop` / `outlier` / supervised), catching 1% / 9% / 14% of its harm. That is the harmful-but-undetected regime, and it is a resolution artifact: the SQI trace's fixed 1-s bins are straddled by a 1.0-s span (29 of 4,073 windows show a fully flat second). Model ranking survives motion (Spearman 0.95-1.00 to severity 0.3) but not lead-off (0.70 / 0.52 / 0.30): xECG is the most lead-off-sensitive model (ECG HR r 0.778 -> 0.378 at 0.6) and its lead over MOMENT reverses at 0.6 (-0.03 ECG, -0.125 fusion). Mean fusion never beats the better unimodal probe (-0.01 to -0.08); it halves lead-off harm but at 0.6 the PPG probe alone is better. The naive missing-PPG fallback (fusion probe on the ECG vector) keeps HR r (-0.003) but doubles the prediction spread (+12 bpm MAE, -11 bpm bias for xECG) and loses BP (delta r -0.21 SBP). MIMIC-ext HR reproduces the PulseDB pattern.
+
+**Follow-ups noted, not executed:** (1) sub-second flat-line detection (0.5-s SQI window or a run-length detector at sample resolution) to close the mild lead-off gap; (2) a recalibrated missing-channel fallback (rescale the single-modality vector to the fused scale, or a PPG-absent probe) for the mitigation paper.
 
 ## Self-review notes
 
